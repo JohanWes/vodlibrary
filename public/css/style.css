@@ -1,0 +1,1091 @@
+/* Base styles */
+:root {
+  /* Color palette */
+  --bg-color: #0f0f13;
+  --bg-secondary: #1a1a22;
+  --bg-tertiary: #23232d;
+  --text-color: #ffffff;
+  --text-secondary: #c2c2d3;
+  --accent-color: #5c6cff;
+  --accent-hover: #4a59e5;
+  --border-color: #2c2c3a;
+  --hover-color: #2a2a36;
+  --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  
+  /* Animation */
+  --transition-fast: 0.15s ease;
+  --transition-normal: 0.25s ease;
+  --transition-slow: 0.4s ease;
+  
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  
+  /* Border radius */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  line-height: 1.6;
+}
+
+/* Import Google Font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-lg);
+}
+
+/* Header */
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 2rem;
+  background-color: var(--bg-secondary);
+  color: white;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+}
+
+.search-container {
+  flex: 1;
+  max-width: 400px;
+  margin: 0 1rem;
+  position: relative;
+}
+
+.search-icon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 1;
+  transition: color var(--transition-normal);
+}
+
+.search-icon.searching {
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 0.5; }
+  50% { opacity: 1; }
+  100% { opacity: 0.5; }
+}
+
+.search-input {
+  width: 100%;
+  padding: 0.6rem 1.2rem 0.6rem 2.5rem;
+  border-radius: 30px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  color: white;
+  font-size: 0.9rem;
+  transition: all var(--transition-normal);
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px rgba(92, 108, 255, 0.2);
+  background-color: var(--bg-tertiary);
+}
+
+.search-input:focus + .search-icon {
+  color: var(--accent-color);
+}
+
+.search-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+}
+
+.logo-link {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  transition: transform var(--transition-fast);
+}
+
+.logo-link:hover {
+  transform: translateY(-2px);
+}
+
+.logo-box {
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, var(--accent-color), #7a5cff);
+  border-radius: var(--radius-sm);
+  margin-right: 12px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(92, 108, 255, 0.3);
+  transition: transform var(--transition-normal), box-shadow var(--transition-normal);
+}
+
+.logo-link:hover .logo-box {
+  transform: rotate(10deg);
+  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.5);
+}
+
+.logo-box::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-40%, -50%);
+  width: 12px;
+  height: 12px;
+  background-color: white;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+
+h1 {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  background: linear-gradient(to right, #fff, #c2c2d3);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+}
+
+/* Add this new rule for the scan status */
+#scan-status {
+  display: none; /* Hide by default */
+  margin-right: var(--space-md); /* Adds 16px space to the right */
+  color: var(--text-secondary);  /* Uses the secondary text color */
+  font-size: 14px;             /* Matches the button's font size */
+  white-space: nowrap;         /* Prevents text wrapping */
+  /* Vertical alignment is handled by the parent flex container */
+}
+
+.refresh-btn {
+  display: flex;
+  align-items: center;
+  background-color: var(--accent-color);
+  color: white;
+  border: none;
+  padding: 10px 18px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  box-shadow: 0 2px 8px rgba(92, 108, 255, 0.3);
+}
+
+.refresh-btn svg {
+  margin-right: 8px;
+  transition: transform 0.3s ease;
+}
+
+.refresh-btn:hover {
+  background-color: var(--accent-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.4);
+}
+
+.refresh-btn:hover svg {
+  transform: rotate(180deg);
+}
+
+.refresh-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(92, 108, 255, 0.3);
+}
+
+/* Videos Grid */
+.videos-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 40px 0 30px;
+}
+
+.videos-header h2 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  position: relative;
+}
+
+.videos-header h2::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 0;
+  width: 40px;
+  height: 3px;
+  background: linear-gradient(to right, var(--accent-color), #7a5cff);
+  border-radius: 3px;
+}
+
+.videos-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.sort-container {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-secondary);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+}
+
+.sort-container span {
+  margin-right: 10px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+/* Favorites toggle styles */
+.favorites-toggle-container {
+  display: flex;
+  align-items: center;
+}
+
+.favorites-toggle-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  background-color: var(--bg-secondary);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  transition: all var(--transition-fast);
+}
+
+.favorites-toggle-label:hover {
+  background-color: var(--bg-tertiary);
+  border-color: var(--accent-color);
+}
+
+.favorites-toggle-input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.favorites-toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  background-color: var(--bg-tertiary);
+  border-radius: 20px;
+  margin-right: 10px;
+  transition: all var(--transition-normal);
+}
+
+.favorites-toggle-switch::before {
+  content: '';
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background-color: var(--text-secondary);
+  transition: all var(--transition-normal);
+}
+
+.favorites-toggle-input:checked + .favorites-toggle-switch {
+  background-color: rgba(255, 215, 0, 0.3);
+}
+
+.favorites-toggle-input:checked + .favorites-toggle-switch::before {
+  transform: translateX(16px);
+  background-color: #FFD700;
+}
+
+.favorites-toggle-text {
+  font-size: 14px;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast);
+}
+
+.favorites-toggle-input:checked ~ .favorites-toggle-text {
+  color: #FFD700;
+}
+
+select {
+  background-color: transparent;
+  color: var(--text-color);
+  border: none;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c2c2d3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+  background-repeat: no-repeat;
+  background-position: right 0px center;
+  background-size: 16px;
+  padding-right: 24px;
+}
+
+select:focus {
+  outline: none;
+}
+
+/* Dropdown menu styling */
+select option {
+  background-color: var(--bg-secondary);
+  color: var(--text-color);
+  padding: 8px 12px;
+}
+
+/* Add a hover effect for dropdown options */
+select option:hover, select option:focus {
+  background-color: var(--bg-tertiary);
+}
+
+.videos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 28px;
+  margin-bottom: 60px;
+}
+
+.video-card {
+  background-color: var(--bg-secondary);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  transition: all var(--transition-normal);
+  cursor: pointer;
+  box-shadow: var(--card-shadow);
+  border: 1px solid var(--border-color);
+}
+
+.video-card:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+  border-color: var(--accent-color);
+}
+
+.thumbnail-container {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%; /* 16:9 aspect ratio */
+  background-color: #000;
+  overflow: hidden;
+}
+
+.thumbnail {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--transition-slow);
+}
+
+.video-card:hover .thumbnail {
+  transform: scale(1.05);
+}
+
+.duration-badge {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: white;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+.thumbnail-container::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(0deg, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0) 40%);
+  pointer-events: none;
+}
+
+/* Favorite indicator styles */
+.favorite-indicator {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 28px;
+  height: 28px;
+  background-color: rgba(0, 0, 0, 0.7);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform var(--transition-normal);
+}
+
+.favorite-indicator svg {
+  color: #FFD700; /* Gold color for star */
+  width: 16px;
+  height: 16px;
+}
+
+.video-card:hover .favorite-indicator {
+  transform: scale(1.1);
+}
+
+/* Favorite indicator styles (Grid View) */
+.favorite-indicator-grid {
+  position: absolute;
+  top: 12px;
+  left: 12px; /* Position top-left */
+  width: 24px; /* Match outcome indicator size */
+  height: 24px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex; /* Use flexbox for centering */
+  align-items: center; /* Vertical centering */
+  justify-content: center; /* Horizontal centering */
+  font-size: 16px; /* Slightly larger star */
+  font-weight: bold;
+  color: var(--text-secondary); /* Default greyish color */
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+  cursor: pointer; /* Make it clickable */
+  transition: all var(--transition-normal);
+}
+
+.video-card:hover .favorite-indicator-grid {
+  transform: scale(1.1);
+}
+
+.favorite-indicator-grid::before {
+  content: '☆'; /* Empty star */
+  transform: translateY(-1px); /* Nudge slightly upwards */
+}
+
+.favorite-indicator-grid.favorited {
+  /* Optional: Add a subtle background glow or keep it consistent */
+}
+
+.favorite-indicator-grid.favorited::before {
+  content: '★'; /* Filled star */
+  color: #FFD700; /* Yellow color */
+}
+
+
+/* Outcome indicator styles */
+.outcome-indicator {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: bold;
+  color: white; /* Default color, overridden by success/failure */
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  z-index: 2;
+  transition: transform var(--transition-normal);
+}
+
+.video-card:hover .outcome-indicator {
+  transform: scale(1.1);
+}
+
+/* Use ::before to insert the icon content */
+.outcome-indicator.success::before {
+  content: '✔'; /* Green checkmark */
+  color: #4CAF50; /* Green color */
+}
+
+.outcome-indicator.failure::before {
+  content: '✖'; /* Red cross */
+  color: #F44336; /* Red color */
+}
+
+.video-info {
+  padding: 20px;
+}
+
+.video-title {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-color);
+  transition: color var(--transition-fast);
+}
+
+.video-card:hover .video-title {
+  color: var(--accent-color);
+}
+
+.video-date {
+  font-size: 13px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+}
+
+.video-date::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  background-color: var(--accent-color);
+  border-radius: 50%;
+  margin-right: 6px;
+}
+
+.loading {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 60px;
+  color: var(--text-secondary);
+  font-size: 16px;
+  letter-spacing: 0.5px;
+  position: relative;
+}
+
+.loading::after {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent-color);
+  border-radius: 50%;
+  margin: 20px auto 0;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Player Page */
+.player-page {
+  /* padding: 30px 0; Removed top padding */
+  padding-bottom: 30px; /* Keep bottom padding */
+}
+
+/* Style for back link now inside header */
+header .back-link { 
+  /* margin-bottom removed as it's no longer needed */
+  margin-left: auto; /* Push it towards the right, adjust as needed */
+  padding: 0 var(--space-lg); /* Add some padding */
+}
+
+header .back-link a { /* Target specifically when inside header */
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  padding: 8px 0; /* Reduced padding, removed background/border */
+  border-radius: var(--radius-md);
+  /* background-color removed */
+  width: fit-content;
+  /* border removed */
+}
+
+header .back-link svg { /* Target specifically when inside header */
+  margin-right: 8px;
+  transition: transform var(--transition-fast);
+}
+
+header .back-link a:hover { /* Target specifically when inside header */
+  color: var(--accent-color); /* Change color on hover */
+  /* background-color removed */
+  /* border-color removed */
+}
+
+header .back-link a:hover svg { /* Target specifically when inside header */
+  transform: translateX(-4px);
+  color: var(--accent-color);
+}
+
+/* Make container full width on player page */
+.player-page .container {
+  max-width: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.video-container {
+  width: 100%;
+  background-color: #000;
+  margin-bottom: 30px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--card-shadow);
+  position: relative;
+}
+
+video {
+  width: 100%;
+  max-height: 70vh;
+  display: block;
+}
+
+.video-info h2 {
+  font-size: 28px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+
+.video-meta {
+  display: flex;
+  align-items: center;
+  margin-bottom: 30px;
+  color: var(--text-secondary);
+  font-size: 15px;
+  background-color: var(--bg-secondary);
+  padding: 14px 20px;
+  border-radius: var(--radius-md);
+  width: fit-content;
+}
+
+.video-meta span {
+  display: flex;
+  align-items: center;
+  padding: 0 20px; /* Equal padding on both sides */
+    margin: 0 8px;
+  position: relative;
+}
+
+
+/* Add separator after each item */
+.video-meta span::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 16px; /* Height of the separator */
+  width: 1px; /* Width of the separator */
+  background-color: var(--accent-color);
+  opacity: 0.7;
+}
+
+/* Remove the first item's left separator */
+.video-meta span:first-child::before {
+  display: none;
+}
+
+/* Remove the last item's right separator */
+.video-meta span:last-child::after {
+  display: none;
+}
+
+.video-actions {
+  margin-top: 30px;
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.share-btn, .favorite-btn {
+  display: flex;
+  align-items: center;
+  background-color: var(--bg-secondary);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 14px; /* Adjusted from 15px */
+  font-weight: 500;
+  transition: all var(--transition-fast);
+}
+
+.share-btn svg, .favorite-btn svg {
+  margin-right: 10px;
+  transition: transform var(--transition-normal);
+}
+
+.share-btn:hover, .favorite-btn:hover {
+  background-color: var(--bg-tertiary);
+  border-color: var(--accent-color);
+}
+
+.share-btn:hover svg {
+  transform: rotate(90deg);
+  color: var(--accent-color);
+}
+
+.favorite-btn:hover svg {
+  transform: scale(1.2);
+  color: var(--accent-color);
+}
+
+/* Favorite button specific styles */
+.favorite-btn .favorite-icon-outline,
+.favorite-btn .favorite-icon-filled {
+  position: relative;
+}
+
+.favorite-btn .favorite-icon-filled {
+  display: none;
+  color: #FFD700; /* Gold color for filled star */
+}
+
+.favorite-btn.active .favorite-icon-outline {
+  display: none;
+}
+
+.favorite-btn.active .favorite-icon-filled {
+  display: inline-block;
+}
+
+.favorite-btn.active {
+  background-color: rgba(255, 215, 0, 0.1); /* Subtle gold background */
+  border-color: #FFD700;
+}
+
+.favorite-btn.active .favorite-text {
+  color: #FFD700;
+}
+
+.favorite-btn.active:hover {
+  background-color: rgba(255, 215, 0, 0.2);
+}
+
+.share-link-container {
+  display: flex;
+  margin-top: 16px;
+  transition: all var(--transition-normal);
+  transform-origin: top;
+}
+
+.share-link-container.hidden {
+  display: none;
+  transform: scaleY(0);
+  opacity: 0;
+}
+
+#share-link {
+  flex: 1;
+  padding: 12px 16px;
+  background-color: var(--bg-tertiary);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  font-size: 14px;
+}
+
+.copy-link-btn {
+  background-color: var(--accent-color);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  cursor: pointer;
+  font-size: 14px; /* Added font-size */
+  font-weight: 500;
+  transition: background-color var(--transition-fast);
+}
+
+.copy-link-btn:hover {
+  background-color: var(--accent-hover);
+}
+
+/* Share Popover Styles */
+.share-container {
+  position: relative; /* Needed for absolute positioning of the popover */
+  display: inline-block; /* Or flex, depending on layout */
+}
+
+.share-popover {
+  display: none; /* Hidden by default */
+  position: absolute;
+  bottom: 100%; /* Position above the button */
+  left: 0;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10; /* Ensure it's above other elements */
+  min-width: 200px; /* Adjust as needed */
+  margin-bottom: var(--space-sm); /* Space between button and popover */
+}
+
+.share-popover.visible {
+  display: block; /* Show the popover */
+}
+
+.popover-btn {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-color);
+  padding: var(--space-sm) var(--space-md);
+  text-align: left;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color var(--transition-fast);
+}
+
+.popover-btn:hover {
+  background-color: var(--hover-color);
+}
+
+.popover-time-display {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: var(--space-sm);
+  padding: 0 var(--space-md);
+  text-align: center;
+}
+
+
+/* Footer */
+footer {
+  background-color: var(--bg-secondary);
+  padding: 20px 0;
+  margin-top: 60px;
+  border-top: 1px solid var(--border-color);
+}
+
+footer p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  text-align: center;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .videos-grid {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+  
+  .videos-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 16px;
+  }
+  
+  .video-meta {
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+  }
+  
+  .video-container {
+    border-radius: var(--radius-md);
+  }
+  
+  .back-link a {
+    padding: 6px 12px;
+  }
+  
+  footer {
+    margin-top: 40px;
+    padding: 15px 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .videos-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  
+  header {
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px;
+  }
+  
+  .search-container {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+  }
+  
+  .header-actions {
+    width: 100%;
+  }
+  
+  .refresh-btn {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .videos-header h2 {
+    font-size: 24px;
+  }
+  
+  .video-info h2 {
+    font-size: 22px;
+  }
+  
+  .share-link-container {
+    flex-direction: column;
+  }
+  
+  #share-link {
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+  }
+  
+  .copy-link-btn {
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+  }
+  
+  footer p {
+    font-size: 12px;
+  }
+}
+
+/* Plyr Player Customization */
+:root {
+  --plyr-color-main: var(--accent-color); /* Use existing accent color */
+  --plyr-video-background: transparent; /* Make background transparent */
+  --plyr-control-radius: var(--radius-md); /* Match existing border radius */
+  --plyr-control-spacing: 10px; /* Adjust spacing */
+  --plyr-font-family: 'Inter', sans-serif; /* Match existing font */
+  --plyr-font-size-base: 14px;
+  --plyr-tooltip-background: rgba(0, 0, 0, 0.8);
+  --plyr-tooltip-color: #ffffff;
+  --plyr-tooltip-radius: var(--radius-sm);
+  --plyr-control-icon-size: 18px;
+}
+
+/* Ensure player fits container */
+.plyr {
+  border-radius: var(--radius-lg); /* Match container radius */
+  overflow: hidden; /* Ensure controls don't overflow */
+}
+
+/* Style the big play button */
+.plyr__control--overlaid {
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  border-radius: 50%;
+  padding: 20px;
+  transition: all var(--transition-normal);
+  backdrop-filter: blur(4px);
+}
+
+.plyr__control--overlaid:hover {
+  background: var(--accent-color);
+}
+
+/* Style the controls background */
+.plyr__controls {
+  background: linear-gradient(to top, rgba(0,0,0,0.7), rgba(0,0,0,0.5) 60%, rgba(0,0,0,0));
+  padding-top: 20px; /* Add padding to prevent overlap */
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg); /* Match container radius at bottom */
+}
+
+/* Style progress bar */
+.plyr__progress input[type=range] {
+  color: var(--accent-color);
+}
+
+/* Style volume slider */
+.plyr__volume input[type=range] {
+  color: var(--accent-color);
+}
+
+/* Style settings menu */
+.plyr__menu__container {
+  background: rgba(0, 0, 0, 0.8);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.plyr__menu__button--radio {
+  color: var(--text-color);
+}
+
+.plyr__menu__button--radio:hover {
+  background: var(--accent-color) !important;
+}
+
+.plyr__menu__button--radio[aria-checked=true]::before {
+  background: var(--accent-color);
+}
+
+/* Ensure fullscreen works well */
+.plyr--fullscreen-fallback {
+  background: #000;
+}
+
+.plyr:fullscreen video {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important; /* Reset the 70vh limit */
+  object-fit: contain !important; /* Maintain aspect ratio */
+}
+
+/* Death Marker Styles */
+.death-marker {
+  position: absolute;
+  top: 20%; /* Vertically center */
+  height: 60%; /* Shorter height */
+  width: 1px; /* Thinner */
+  background-color: rgba(255, 0, 0, 0.8); /* Red color, slightly less transparent */
+  z-index: 3; /* Ensure it's above progress bar but potentially below scrubber handle */
+  pointer-events: none; /* Prevent interference with seeking */
+  transform: translateX(-50%); /* Center the marker on its percentage */
+}

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="A simple VOD sharing system">
+  <title>Loading...</title>
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="stylesheet" href="/css/style.css">
+  <link rel="icon" href="/favicon.ico" type="image/x-icon">
+</head>
+<body>
+  <header>
+    <div class="logo-container">
+      <div class="logo-box"></div>
+      <h1 id="app-title">Loading...</h1>
+    </div>
+    <div class="search-container">
+      <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      <input type="text" id="search-input" placeholder="Search videos..." class="search-input">
+    </div>
+    <div class="header-actions">
+      <div id="scan-status" class="scan-status"></div> <!-- Added scan status display -->
+      <button id="refresh-btn" class="refresh-btn">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+          <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
+          <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
+        </svg>
+        Refresh Videos
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <div class="videos-header">
+        <h2>Videos</h2>
+        <div class="videos-controls">
+          <div class="favorites-toggle-container">
+            <label class="favorites-toggle-label" for="favorites-toggle">
+              <input type="checkbox" id="favorites-toggle" class="favorites-toggle-input">
+              <span class="favorites-toggle-switch"></span>
+              <span class="favorites-toggle-text">Show Favorites</span>
+            </label>
+          </div>
+          <div class="sort-container">
+            <span>Sort by:</span>
+            <select id="sort-select">
+              <option value="date_added_desc">Date added (Newest)</option> 
+              <option value="date_added_asc">Date added (Oldest)</option>
+              <option value="title_asc">Title (A-Z)</option>
+              <option value="title_desc">Title (Z-A)</option>
+              <option value="duration_desc">Duration (Longest)</option> 
+              <option value="duration_asc">Duration (Shortest)</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      
+      <div id="videos-grid" class="videos-grid">
+        <!-- Videos will be loaded here dynamically -->
+        <div class="loading">Loading videos...</div>
+      </div>
+    </div>
+  </main>
+  
+  <footer>
+    <div class="container">
+      <p id="footer-text">&copy; Loading... - A simple VOD sharing system</p>
+    </div>
+  </footer>
+
+  <script src="/js/utils.js"></script>
+  <script src="/js/video-preloader.js"></script>
+  <!-- GSAP Core and Plugins -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollToPlugin.min.js"></script> 
+  <script src="/js/main.js"></script>
+</body>
+</html>
