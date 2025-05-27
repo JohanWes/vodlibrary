@@ -57,7 +57,7 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 2rem;
+  padding: 0.75rem 2rem;
   background-color: var(--bg-secondary);
   color: white;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
@@ -394,6 +394,29 @@ select option:hover, select option:focus {
   border: 1px solid var(--border-color);
 }
 
+.video-card-link {
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  transition: all var(--transition-normal);
+}
+
+.video-card-link:hover {
+  text-decoration: none;
+  color: inherit;
+}
+
+.video-card-link:visited {
+  text-decoration: none;
+  color: inherit;
+}
+
+.video-card-link:focus {
+  text-decoration: none;
+  color: inherit;
+  outline: none;
+}
+
 .video-card:hover {
   transform: translateY(-8px);
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
@@ -677,8 +700,18 @@ header .back-link a:hover svg { /* Target specifically when inside header */
 
 video {
   width: 100%;
-  max-height: 70vh;
+  max-height: 85vh;
   display: block;
+}
+
+.video-container {
+  width: 100%;
+  background-color: #000;
+  margin-bottom: 15px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  box-shadow: var(--card-shadow);
+  position: relative;
 }
 
 .video-info h2 {

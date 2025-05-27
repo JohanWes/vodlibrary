@@ -143,7 +143,7 @@ async function getAppConfig() {
     return await response.json();
   } catch (error) {
     console.error('Error fetching app configuration:', error);
-    return { vodsName: 'Johan' }; // Default fallback
+    return { vodsName: 'Sample' }; // Default fallback
   }
 }
 

@@ -1,10 +1,11 @@
 // Express server with API endpoints for the video sharing/viewing software
 require('dotenv').config();
+console.log('SHARE_BASE_URL from .env:', process.env.SHARE_BASE_URL);
 
 const express = require('express');
 const cookieParser = require('cookie-parser'); // Added cookie-parser
 const app = express();
-const { initializeDatabase, getVideoByPath, deleteVideo } = require('./db/database'); // Added getVideoByPath, deleteVideo
+const { initializeDatabase, getVideoByPath, deleteVideo, getVideoById } = require('./db/database'); // Added getVideoByPath, deleteVideo, getVideoById
 const { scanLibrary, processVideoFile, isVideoFile } = require('./lib/scanner'); // Added processVideoFile, isVideoFile
 const path = require('path');
 const fs = require('fs');
@@ -16,7 +17,7 @@ const cdnManager = require('./lib/cdn');
 const port = process.env.PORT || 8005;
 const publicIp = process.env.HOST_IP || 'localhost';
 const basePath = process.env.BASE_PATH || '';
-const vodsName = process.env.VODS_NAME || 'Johan';
+const vodsName = process.env.VODS_NAME || 'VODlibrary';
 console.log(`Using base path: "${basePath}", VODs name: "${vodsName}"`);
 
 // Initialize server-side caching
@@ -78,20 +79,29 @@ if (!fs.existsSync(thumbnailDir)) {
 
 // --- Authentication Setup ---
 const SESSION_KEY = process.env.SESSION_KEY;
+const ENABLE_AUTH = process.env.ENABLE_AUTH === 'true'; // New: Master switch for authentication
 const AUTH_COOKIE_NAME = 'auth_token';
 const AUTH_COOKIE_VALUE = 'valid-session'; // Simple token value
 const AUTH_COOKIE_OPTIONS = {
   httpOnly: true, // Prevent client-side JS access
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  maxAge: 7 * 24 * 60 * 60 * 10000, // 70 days
   // secure: process.env.NODE_ENV === 'production', // Use only with HTTPS
   path: basePath || '/', // Ensure cookie path matches base path
 };
 
 // Middleware to check authentication
 function checkAuth(req, res, next) {
-  // Skip auth if SESSION_KEY is not set
-  if (!SESSION_KEY) {
+  // If authentication is explicitly disabled, allow all access
+  if (!ENABLE_AUTH) {
+    // console.log('Authentication is disabled. Allowing access.'); // Removed excessive log
     return next();
+  }
+
+  // If authentication is enabled but SESSION_KEY is not set, prevent access
+  if (!SESSION_KEY) {
+    console.error('Authentication is enabled but SESSION_KEY is not set. Please set SESSION_KEY or disable authentication (ENABLE_AUTH=false).');
+    // Render a simple error page or redirect to a configuration error page
+    return res.status(500).send('Server configuration error: SESSION_KEY is required when authentication is enabled.');
   }
 
   // Allow access to login page, login POST, CSS, and favicon without auth
@@ -165,6 +175,30 @@ app.post(basePath + '/login', (req, res) => {
   }
 });
 
+// Handle URL-based session key (before auth middleware)
+app.get(basePath + '/:sessionKeyParam/*', (req, res, next) => {
+  if (!SESSION_KEY) {
+    return next(); // No session key configured, skip
+  }
+
+  const sessionKeyParam = req.params.sessionKeyParam;
+  if (sessionKeyParam === SESSION_KEY) {
+    console.log('URL session key valid, setting auth cookie and redirecting.');
+    res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
+
+    // Reconstruct the URL without the session key parameter
+    // req.originalUrl includes query parameters
+    const originalUrl = req.originalUrl;
+    const newPath = originalUrl.replace(`/${sessionKeyParam}`, '');
+    
+    // Ensure the newPath starts with basePath if it was originally present
+    const redirectUrl = newPath.startsWith(basePath) ? newPath : basePath + newPath;
+
+    return res.redirect(redirectUrl);
+  }
+  next(); // Session key in URL is invalid or not present, proceed to next middleware (checkAuth)
+});
+
 // --- Server-Sent Events Endpoint (Moved Before Auth) ---
 app.get(basePath + '/api/updates', (req, res) => {
   // Set headers for SSE
@@ -206,34 +240,187 @@ app.get(basePath + '/api/updates', (req, res) => {
 // --- End SSE Endpoint ---
 
 
+// Serve player page (protected) - Moved before checkAuth
+app.get(basePath + '/watch/:id', async (req, res) => {
+  const videoId = req.params.id;
+  const db = req.app.locals.db; // Access the database instance from app.locals
+
+  try {
+    const video = await getVideoById(db, videoId);
+
+    if (!video) {
+      return res.status(404).send('Video not found');
+    }
+
+    // Read the player.html file
+    let playerHtml = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
+
+    // Construct Open Graph meta tags
+    const ogTitle = video.title;
+    const ogType = 'video.movie'; // Or video.episode, video.tv_show, video.other
+    let ogImage = `${req.protocol}://${req.get('host')}${basePath}${video.thumbnail_path}`; // Ensure absolute URL for og:image, including basePath
+    // If CDN is enabled, use the CDN URL
+    if (cdnEnabled) {
+      ogImage = cdnManager.getCdnUrl(video.thumbnail_path, 'thumbnail'); // cdnManager should handle basePath internally if needed
+    }
+    const ogUrl = `${req.protocol}://${req.get('host')}${basePath}/watch/${videoId}`; // Canonical URL
+    const videoStreamUrl = `${req.protocol}://${req.get('host')}${basePath}/api/video/${videoId}`; // Direct video stream URL
+
+    const ogTags = `
+  <meta property="og:title" content="${ogTitle}" />
+  <meta property="og:type" content="${ogType}" />
+  <meta property="og:image" content="${ogImage}" />
+  <meta property="og:url" content="${ogUrl}" />
+  <meta property="og:description" content="Watch ${ogTitle} on ${vodsName}" />
+  <meta property="og:site_name" content="${vodsName}" />
+  <meta property="og:video" content="${videoStreamUrl}" />
+  <meta property="og:video:type" content="video/mp4" />
+  <meta property="og:video:secure_url" content="${videoStreamUrl}" />
+  <meta property="og:video:width" content="${video.width || 1280}" />
+  <meta property="og:video:height" content="${video.height || 720}" />
+    `;
+
+    // Inject meta tags into the <head> section
+    playerHtml = playerHtml.replace('</head>', `${ogTags}\n</head>`);
+
+    // Update the title dynamically as well
+    playerHtml = playerHtml.replace('<title>Loading...</title>', `<title>${ogTitle}</title>`);
+
+    res.send(playerHtml);
+
+  } catch (error) {
+    console.error(`Error serving video ${videoId}:`, error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// Video stream route - Moved before checkAuth
+app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const video = await getVideoById(db, req.params.id);
+    
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    const videoPath = video.path;
+    const stat = fs.statSync(videoPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+    
+    const cacheMaxAge = 3600; // 1 hour in seconds
+    res.setHeader('Cache-Control', `public, max-age=${cacheMaxAge}`);
+    res.setHeader('ETag', `"${video.id}-${stat.mtime.getTime()}"`);
+    
+    if (cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
+      const protocol = req.protocol;
+      const host = req.get('host');
+      const originalUrl = `${protocol}://${host}${req.originalUrl}`;
+      const cdnUrl = cdnManager.getCdnUrl(originalUrl, 'video');
+      
+      return res.redirect(cdnUrl);
+    }
+    
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = (end - start) + 1;
+      
+      const cachedSegment = videoCache.getCachedSegment(video.id, Math.floor(start / (2 * 1024 * 1024)));
+      
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': 'video/mp4',
+      };
+      
+      res.writeHead(206, head);
+      
+      if (cachedSegment) {
+        console.log(`Serving segment from cache for video ${video.id}`);
+        
+        if (cachedSegment.length === chunksize) {
+          res.end(cachedSegment);
+        } else {
+          const bufferStream = require('stream').Readable.from(cachedSegment);
+          bufferStream.pipe(res);
+        }
+      } else {
+        const file = fs.createReadStream(videoPath, { start, end });
+        file.pipe(res);
+        
+        // Only cache if it's a standard segment size or the first segment
+        if (start % (2 * 1024 * 1024) === 0 || start === 0) {
+          const segmentNumber = Math.floor(start / (2 * 1024 * 1024));
+          videoCache.cacheSegmentFromFile(
+            video.id, 
+            segmentNumber, 
+            videoPath, 
+            start, 
+            Math.min(start + (2 * 1024 * 1024) - 1, fileSize - 1)
+          ).catch(err => console.error('Error caching segment:', err));
+        }
+      }
+    } else {
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': 'video/mp4',
+      };
+      
+      res.writeHead(200, head);
+      
+      fs.createReadStream(videoPath).pipe(res);
+      
+      videoCache.cacheSegmentFromFile(
+        video.id, 
+        0, 
+        videoPath, 
+        0, 
+        Math.min(2 * 1024 * 1024 - 1, fileSize - 1)
+      ).catch(err => console.error('Error caching first segment:', err));
+    }
+  } catch (error) {
+    console.error(`Error streaming video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to stream video' });
+  }
+});
+
+// Serve previews with caching headers (Moved before checkAuth)
+app.use(basePath + '/previews', express.static(path.join(__dirname, 'public', 'previews'), {
+  maxAge: staticCacheDuration
+}));
+
+// Serve thumbnails with caching headers (Moved before checkAuth)
+app.use(basePath + '/thumbnails', express.static(path.join(__dirname, 'public', 'thumbnails'), {
+  maxAge: staticCacheDuration
+}));
+
+// Serve API config (Moved before checkAuth)
+app.get(basePath + '/api/config', (req, res) => {
+  res.json({
+    vodsName: process.env.VODS_NAME || 'VODlibrary' // Provide VODS_NAME from env
+  });
+});
+
 // Apply authentication middleware (protects routes below this)
 app.use(checkAuth);
-
-// Serve the rest of the public directory (now protected)
-app.use(basePath, express.static(path.join(__dirname, 'public')));
 
 // Serve main index page (protected)
 app.get(basePath + '/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Serve player page (protected)
-app.get(basePath + '/watch/:id', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'player.html'));
-});
+// Serve the rest of the public directory (Moved after checkAuth)
+app.use(basePath, express.static(path.join(__dirname, 'public')));
 
 // API routes (protected by checkAuth middleware applied above)
 const apiRoutes = require('./routes/api');
 app.use(basePath + '/api', apiRoutes);
 
 // --- End Routes & Middleware Order ---
-
-app.get(basePath + '/api/config', (req, res) => {
-  res.json({
-    vodsName: vodsName,
-    cdnEnabled: cdnEnabled
-  });
-});
 
 async function startServer() {
   try {

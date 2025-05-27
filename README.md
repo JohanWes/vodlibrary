@@ -39,6 +39,7 @@ This application can be installed as a Windows service to run automatically in t
 
 **Prerequisites:**
 - Node.js installed and added to your system PATH.
+- **FFmpeg**: Required for video processing (thumbnail generation, video dimension extraction). Download from [ffmpeg.org](https://ffmpeg.org/download.html) and ensure `ffmpeg` and `ffprobe` executables are in your system's PATH. On Windows, you can install via Chocolatey: `choco install ffmpeg`.
 
 **Installation:**
 1. Open a Command Prompt or PowerShell **as Administrator**.

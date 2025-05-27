@@ -30,6 +30,8 @@ async function initializeDatabase() {
             title TEXT NOT NULL,
             path TEXT NOT NULL UNIQUE,
             duration INTEGER,
+            width INTEGER,  -- New column for video width
+            height INTEGER, -- New column for video height
             added_date TEXT DEFAULT CURRENT_TIMESTAMP,
             thumbnail_path TEXT,
             death_timestamps TEXT -- Added column for JSON death timestamps
@@ -48,10 +50,23 @@ async function initializeDatabase() {
               // Attempt to add death_timestamps column (ignore duplicate error)
               db.run(`ALTER TABLE videos ADD COLUMN death_timestamps TEXT`, (err) => {
                 if (err && !err.message.includes('duplicate column name')) {
+                  // Only reject if it's a real error, not just column already exists
                   return reject(err);
                 }
-                // All steps completed successfully
-                resolve(db);
+                // Attempt to add width column (ignore duplicate error)
+                db.run(`ALTER TABLE videos ADD COLUMN width INTEGER`, (err) => {
+                  if (err && !err.message.includes('duplicate column name')) {
+                    return reject(err);
+                  }
+                  // Attempt to add height column (ignore duplicate error)
+                  db.run(`ALTER TABLE videos ADD COLUMN height INTEGER`, (err) => {
+                    if (err && !err.message.includes('duplicate column name')) {
+                      return reject(err);
+                    }
+                    // All steps completed successfully
+                    resolve(db);
+                  });
+                });
               });
             });
           });
@@ -149,7 +164,7 @@ function getAllVideos(db) {
  */
 function getVideoById(db, id) {
   return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM videos WHERE id = ?', [id], (err, row) => {
+    db.get('SELECT *, width, height FROM videos WHERE id = ?', [id], (err, row) => { // Select width and height
       if (err) {
         reject(err);
         return;
@@ -164,12 +179,12 @@ function getVideoById(db, id) {
  */
 function addVideo(db, video) {
   return new Promise((resolve, reject) => {
-    // Destructure all expected fields, including the new one
-    const { title, path, duration, thumbnail_path, added_date, death_timestamps } = video;
+    // Destructure all expected fields, including the new ones
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps } = video;
     
     db.run(
-      'INSERT OR REPLACE INTO videos (title, path, duration, thumbnail_path, added_date, death_timestamps) VALUES (?, ?, ?, ?, ?, ?)',
-      [title, path, duration, thumbnail_path, added_date, death_timestamps], // Add death_timestamps here
+      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps], // Add width and height here
       function(err) {
         if (err) {
           reject(err);
@@ -235,12 +250,12 @@ function getVideoByPath(db, path) {
  */
 function updateVideo(db, id, video) {
   return new Promise((resolve, reject) => {
-    // Destructure all expected fields, including the new one
-    const { title, path, duration, thumbnail_path, added_date, death_timestamps } = video;
+    // Destructure all expected fields, including the new ones
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps } = video;
     
     db.run(
-      'UPDATE videos SET title = ?, path = ?, duration = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ? WHERE id = ?',
-      [title, path, duration, thumbnail_path, added_date, death_timestamps, id], // Add death_timestamps here
+      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ? WHERE id = ?',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, id], // Add width and height here
       function(err) {
         if (err) {
           reject(err);

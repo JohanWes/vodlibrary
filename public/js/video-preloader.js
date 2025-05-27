@@ -16,17 +16,17 @@ const LS_METADATA_PREFIX = 'vod_metadata_';
 const LS_PRELOADED_VIDEOS = 'vod_preloaded_videos';
 
 const config = {
-  maxCacheSize: 500 * 1024 * 1024, // Maximum size of the cache in bytes (default: 500MB)
-  // Default segment size in bytes (2MB)
-  segmentSize: 2 * 1024 * 1024,
-  // Number of segments to preload for each video
-  preloadSegments: 2,
+  maxCacheSize: 250 * 1024 * 1024, // Reduced cache size (250MB) for better performance
+  // Reduced segment size for faster loading (1MB)
+  segmentSize: 1 * 1024 * 1024,
+  // Reduced number of segments to preload
+  preloadSegments: 1,
   // Quality to use for preloaded segments (low, medium, high)
   preloadQuality: 'low',
-  // Timeout for preloading (ms)
-  preloadTimeout: 10000,
-  // Maximum number of concurrent preloads
-  maxConcurrentPreloads: 3,
+  // Reduced timeout for faster failure detection (5s)
+  preloadTimeout: 5000,
+  // Reduced maximum number of concurrent preloads
+  maxConcurrentPreloads: 2,
   // Maximum localStorage size (5MB)
   maxLocalStorageSize: 5 * 1024 * 1024 // Maximum localStorage size (5MB)
 };

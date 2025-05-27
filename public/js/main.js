@@ -40,7 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let showOnlyFavorites = false;
   let currentPage = 1;
   let totalPages = 1;
-  let limit = 30; // Default limit, will be updated from API response - Reduced batch size
+  let limit = 20; // Default limit, will be updated from API response - Reduced batch size for better scrolling performance
   let totalVideos = 0;
   let currentAbortController = null; // To cancel ongoing fetch requests
   let scanPollingInterval = null; // Interval ID for scan status polling
@@ -320,30 +320,27 @@ document.addEventListener('DOMContentLoaded', async () => {
       // --- End Outcome Indicator Logic ---
 
       videoCard.innerHTML = `
-        <div class="thumbnail-container">
-          <img class="thumbnail" src="${video.thumbnail_path || getPlaceholderThumbnail()}" alt="${video.title}" loading="lazy">
-          <div class="duration-badge">${durationFormatted}</div>
-          ${outcomeIndicatorHTML} {/* Add outcome indicator */}
-          <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span> {/* Favorite Indicator */}
-        </div>
-        <div class="video-info">
-          <div class="video-title">${video.title}</div>
-          <div class="video-date">${formattedDate}</div>
-        </div>
+        <a href="/watch/${video.id}" rel="noopener noreferrer" class="video-card-link">
+            <div class="thumbnail-container">
+              <img class="thumbnail" src="${video.thumbnail_path || getPlaceholderThumbnail()}" alt="${video.title}" loading="lazy">
+              <div class="duration-badge">${durationFormatted}</div>
+              ${outcomeIndicatorHTML} {/* Add outcome indicator */}
+            </div>
+            <div class="video-info">
+              <div class="video-title">${video.title}</div>
+              <div class="video-date">${formattedDate}</div>
+            </div>
+        </a>
+        <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>
       `;
-
-      videoCard.addEventListener('click', () => {
-        // Navigate to player only if the click wasn't on the favorite indicator
-        if (!event.target.classList.contains('favorite-indicator-grid')) {
-            window.location.href = `/watch/${video.id}`;
-        }
-      });
       
       // --- Add Click Listener for Favorite Indicator ---
+      // The favorite indicator is now a direct child of videoCard, not within the <a> tag.
+      // Its click listener still needs to stop propagation to prevent the <a> tag from navigating.
       const favoriteIndicator = videoCard.querySelector('.favorite-indicator-grid');
       if (favoriteIndicator) {
           favoriteIndicator.addEventListener('click', (event) => {
-              event.stopPropagation(); // Prevent card click navigation
+              event.stopPropagation(); // Prevent card link navigation
               const videoId = event.target.dataset.videoId;
               const isNowFavorited = VideoUtils.toggleFavorite(videoId);
               event.target.classList.toggle('favorited', isNowFavorited);
@@ -351,13 +348,32 @@ document.addEventListener('DOMContentLoaded', async () => {
               const videoIndex = allVideos.findIndex(v => v.id.toString() === videoId);
               if (videoIndex > -1) {
                   allVideos[videoIndex].is_favorite = isNowFavorited ? 1 : 0; 
-                  // Note: is_favorite might not exist on the object if not sent by API,
-                  // but this helps if we implement client-side filtering based on it later.
               }
               showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
           });
       }
       // --- End Favorite Indicator Click Listener ---
+
+      // --- Add Click Listener for Video Card Link ---
+      const videoLink = videoCard.querySelector('.video-card-link');
+      if (videoLink) {
+          videoLink.addEventListener('click', (event) => {
+              // Check for middle click (button 1) or Ctrl+left click
+              if (event.button === 1 || (event.button === 0 && event.ctrlKey)) {
+                  event.preventDefault(); // Prevent default navigation
+                  window.open(videoLink.href, '_blank', 'noopener,noreferrer');
+              }
+              // For regular left clicks (button 0 without Ctrl), let default behavior happen
+          });
+          
+          // Also handle mousedown for middle click detection
+          videoLink.addEventListener('mousedown', (event) => {
+              if (event.button === 1) {
+                  event.preventDefault(); // Prevent middle-click scroll behavior
+              }
+          });
+      }
+      // --- End Video Card Link Click Listener ---
 
       // Apply animation delay
       videoCard.style.animationDelay = `${index * 0.05}s`;
@@ -573,20 +589,23 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Infinite Scroll Handler
+   * Infinite Scroll Handler - Optimized for responsiveness
    */
   const handleInfiniteScroll = debounce(() => {
     if (isLoading || currentPage >= totalPages) {
       return; // Don't load if already loading or no more pages
     }
 
-    // Check if user is near the bottom
-    const scrollThreshold = 2000; // Pixels from bottom - Increased for earlier loading
-    if (window.innerHeight + window.scrollY >= document.body.offsetHeight - scrollThreshold) {
+    // More aggressive threshold for faster scrolling
+    const scrollThreshold = 3000; // Increased to 3000px for earlier loading
+    const scrollPosition = window.innerHeight + window.scrollY;
+    const documentHeight = document.documentElement.scrollHeight;
+    
+    if (scrollPosition >= documentHeight - scrollThreshold) {
       console.log(`Loading page ${currentPage + 1}`);
       loadVideos(currentPage + 1, true); // Load next page and append
     }
-  }, 100); // Debounce scroll checks
+  }, 50); // Reduced debounce for more responsive detection
 
   /**
    * Connect to the Server-Sent Events endpoint
@@ -716,8 +735,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const scrollTarget = window; 
     let targetScrollY = window.scrollY;
     const scrollSensitivity = 1.0; // Adjust sensitivity as needed
-    const animationDuration = 0.8; // Adjust duration for smoothness
-    const animationEase = "power2.out"; // Adjust ease for feel
+    const animationDuration = 0.4; // Reduced duration for more responsive scrolling
+    const animationEase = "power1.out"; // Lighter ease for better performance
 
     // Prevent default scroll behavior and animate with GSAP
     window.addEventListener('wheel', (event) => {
