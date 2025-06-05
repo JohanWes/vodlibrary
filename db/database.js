@@ -63,8 +63,26 @@ async function initializeDatabase() {
                     if (err && !err.message.includes('duplicate column name')) {
                       return reject(err);
                     }
-                    // All steps completed successfully
-                    resolve(db);
+                    // Attempt to add preview_clips column (ignore duplicate error)
+                    db.run(`ALTER TABLE videos ADD COLUMN preview_clips TEXT`, (err) => {
+                      if (err && !err.message.includes('duplicate column name')) {
+                        return reject(err);
+                      }
+                      // Attempt to add preview_generation_status column (ignore duplicate error)
+                      db.run(`ALTER TABLE videos ADD COLUMN preview_generation_status TEXT DEFAULT 'pending'`, (err) => {
+                        if (err && !err.message.includes('duplicate column name')) {
+                          return reject(err);
+                        }
+                        // Attempt to add preview_generation_date column (ignore duplicate error)
+                        db.run(`ALTER TABLE videos ADD COLUMN preview_generation_date TEXT`, (err) => {
+                          if (err && !err.message.includes('duplicate column name')) {
+                            return reject(err);
+                          }
+                          // All steps completed successfully
+                          resolve(db);
+                        });
+                      });
+                    });
                   });
                 });
               });
@@ -180,11 +198,11 @@ function getVideoById(db, id) {
 function addVideo(db, video) {
   return new Promise((resolve, reject) => {
     // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps } = video;
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date } = video;
     
     db.run(
-      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps], // Add width and height here
+      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date],
       function(err) {
         if (err) {
           reject(err);
@@ -204,6 +222,25 @@ function updateVideoThumbnail(db, id, thumbnail_path) {
     db.run(
       'UPDATE videos SET thumbnail_path = ? WHERE id = ?',
       [thumbnail_path, id],
+      function(err) {
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(this.changes);
+      }
+    );
+  });
+}
+
+/**
+ * Update a video's preview data
+ */
+function updateVideoPreview(db, id, preview_clips, preview_generation_status, preview_generation_date) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      'UPDATE videos SET preview_clips = ?, preview_generation_status = ?, preview_generation_date = ? WHERE id = ?',
+      [preview_clips, preview_generation_status, preview_generation_date, id],
       function(err) {
         if (err) {
           reject(err);
@@ -251,11 +288,11 @@ function getVideoByPath(db, path) {
 function updateVideo(db, id, video) {
   return new Promise((resolve, reject) => {
     // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps } = video;
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date } = video;
     
     db.run(
-      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ? WHERE id = ?',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, id], // Add width and height here
+      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ?, preview_clips = ?, preview_generation_status = ?, preview_generation_date = ? WHERE id = ?',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, id],
       function(err) {
         if (err) {
           reject(err);
@@ -303,10 +340,11 @@ module.exports = {
   getVideoById,
   addVideo,
   updateVideoThumbnail,
+  updateVideoPreview,
   clearVideos,
   getVideoByPath,
   updateVideo,
   getAllVideoPaths,
   deleteVideo,
-  getVideosPaginated // Export the new function
+  getVideosPaginated
 };

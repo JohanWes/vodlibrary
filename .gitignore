@@ -54,3 +54,13 @@ public/previews/
 
 # Daemon executables
 daemon/
+
+# Test videos directory
+test-videos/
+
+# Other
+IMPLEMENTATION_SUMMARY.md
+CLAUDE.md
+
+# Memory Bank
+memory-bank/

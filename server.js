@@ -405,6 +405,83 @@ app.get(basePath + '/api/config', (req, res) => {
   });
 });
 
+// Preview API endpoints (before auth to allow public access for hover previews)
+app.get(basePath + '/api/videos/:id/preview-info', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const video = await getVideoById(db, req.params.id);
+    
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    const previewInfo = {
+      hasPreview: !!video.preview_clips,
+      status: video.preview_generation_status || 'pending',
+      clips: video.preview_clips ? JSON.parse(video.preview_clips).clips : []
+    };
+    
+    res.json(previewInfo);
+  } catch (error) {
+    console.error(`Error getting preview info for video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to get preview info' });
+  }
+});
+
+app.get(basePath + '/api/videos/:id/preview/:timestamp?', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const videoId = req.params.id;
+    const timestamp = parseInt(req.params.timestamp || '10', 10);
+    
+    const video = await getVideoById(db, videoId);
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    // Parse preview clips JSON
+    const previewClips = video.preview_clips ? JSON.parse(video.preview_clips) : null;
+    
+    if (!previewClips || !previewClips.clips) {
+      return res.status(404).json({ error: 'No preview clips available' });
+    }
+    
+    // Find matching preview clip
+    const clip = previewClips.clips.find(c => c.timestamp === timestamp);
+    if (!clip) {
+      return res.status(404).json({ error: 'Preview clip not found' });
+    }
+    
+    // Serve preview file with caching headers
+    const previewPath = path.join(__dirname, 'public', clip.path);
+    
+    if (!fs.existsSync(previewPath)) {
+      return res.status(404).json({ error: 'Preview file not found' });
+    }
+    
+    const stat = fs.statSync(previewPath);
+    
+    // CDN integration
+    if (cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
+      const cdnUrl = cdnManager.getCdnUrl(clip.path, 'preview');
+      return res.redirect(cdnUrl);
+    }
+    
+    // Set aggressive caching for preview clips
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    const stream = fs.createReadStream(previewPath);
+    stream.pipe(res);
+    
+  } catch (error) {
+    console.error(`Error serving preview for video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to serve preview' });
+  }
+});
+
 // Apply authentication middleware (protects routes below this)
 app.use(checkAuth);
 

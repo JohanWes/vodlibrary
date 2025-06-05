@@ -180,6 +180,205 @@ router.post('/cdn/config', (req, res) => {
   }
 });
 
+// Preview API endpoints
+router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const videoId = req.params.id;
+    const timestamp = parseInt(req.params.timestamp || '10', 10);
+    
+    const video = await getVideoById(db, videoId);
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    // Parse preview clips JSON
+    const previewClips = video.preview_clips ? JSON.parse(video.preview_clips) : null;
+    
+    if (!previewClips || !previewClips.clips) {
+      // Fallback to range request from main video
+      return serveVideoSegment(req, res, video, timestamp);
+    }
+    
+    // Find matching preview clip
+    const clip = previewClips.clips.find(c => c.timestamp === timestamp);
+    if (!clip) {
+      return res.status(404).json({ error: 'Preview clip not found' });
+    }
+    
+    // Serve preview file with caching headers
+    const previewPath = path.join(__dirname, '..', 'public', clip.path);
+    
+    if (!fs.existsSync(previewPath)) {
+      return res.status(404).json({ error: 'Preview file not found' });
+    }
+    
+    const stat = fs.statSync(previewPath);
+    
+    // CDN integration
+    if (cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
+      const cdnUrl = cdnManager.getCdnUrl(clip.path, 'preview');
+      return res.redirect(cdnUrl);
+    }
+    
+    // Set aggressive caching for preview clips
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
+    res.setHeader('Content-Length', stat.size);
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    
+    const stream = fs.createReadStream(previewPath);
+    stream.pipe(res);
+    
+  } catch (error) {
+    console.error(`Error serving preview for video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to serve preview' });
+  }
+});
+
+// Preview metadata endpoint
+router.get('/videos/:id/preview-info', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const video = await getVideoById(db, req.params.id);
+    
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    const previewInfo = {
+      hasPreview: !!video.preview_clips,
+      status: video.preview_generation_status || 'pending',
+      clips: video.preview_clips ? JSON.parse(video.preview_clips).clips : []
+    };
+    
+    res.json(previewInfo);
+  } catch (error) {
+    console.error(`Error getting preview info for video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to get preview info' });
+  }
+});
+
+// Fallback video segment serving for when preview clips don't exist
+async function serveVideoSegment(req, res, video, startTime) {
+  try {
+    const videoPath = video.path;
+    const stat = fs.statSync(videoPath);
+    const fileSize = stat.size;
+    
+    // Calculate approximate byte range for the requested time segment
+    const bytesPerSecond = fileSize / video.duration;
+    const startByte = Math.floor(startTime * bytesPerSecond);
+    const endByte = Math.min(Math.floor((startTime + 3) * bytesPerSecond), fileSize - 1);
+    const chunksize = (endByte - startByte) + 1;
+    
+    const head = {
+      'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
+      'Cache-Control': 'public, max-age=3600'
+    };
+    
+    res.writeHead(206, head);
+    
+    const file = fs.createReadStream(videoPath, { start: startByte, end: endByte });
+    file.pipe(res);
+    
+  } catch (error) {
+    console.error(`Error serving video segment fallback:`, error);
+    res.status(500).json({ error: 'Failed to serve video segment' });
+  }
+}
+
+// Video segments endpoint for preview functionality
+router.get('/videos/:id/segments/:segmentNumber', async (req, res) => {
+  try {
+    const db = req.app.locals.db;
+    const videoId = req.params.id;
+    const segmentNumber = parseInt(req.params.segmentNumber, 10);
+    const quality = req.query.quality || 'medium';
+    
+    const video = await getVideoById(db, videoId);
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+    
+    const videoPath = video.path;
+    const stat = fs.statSync(videoPath);
+    const fileSize = stat.size;
+    
+    // Calculate segment size based on quality
+    let segmentSize;
+    switch (quality) {
+      case 'low':
+        segmentSize = 512 * 1024; // 512KB for low quality
+        break;
+      case 'high':
+        segmentSize = 2 * 1024 * 1024; // 2MB for high quality
+        break;
+      default:
+        segmentSize = 1 * 1024 * 1024; // 1MB for medium quality
+    }
+    
+    // Calculate byte range for the requested segment
+    const startByte = segmentNumber * segmentSize;
+    const endByte = Math.min(startByte + segmentSize - 1, fileSize - 1);
+    
+    if (startByte >= fileSize) {
+      return res.status(416).json({ error: 'Requested segment beyond file size' });
+    }
+    
+    const chunksize = (endByte - startByte) + 1;
+    
+    // Check CDN integration
+    if (cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
+      const protocol = req.protocol;
+      const host = req.get('host');
+      const originalUrl = `${protocol}://${host}${req.originalUrl}`;
+      const cdnUrl = cdnManager.getCdnUrl(originalUrl, 'video');
+      return res.redirect(cdnUrl);
+    }
+    
+    // Check cache for this segment
+    const cachedSegment = videoCache.getCachedSegment(videoId, segmentNumber);
+    
+    // Set headers for partial content
+    const headers = {
+      'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
+      'Accept-Ranges': 'bytes',
+      'Content-Length': chunksize,
+      'Content-Type': 'video/mp4',
+      'Cache-Control': 'public, max-age=3600', // 1 hour cache
+      'ETag': `"${videoId}-${segmentNumber}-${quality}"`
+    };
+    
+    res.writeHead(206, headers);
+    
+    if (cachedSegment) {
+      console.log(`Serving segment ${segmentNumber} from cache for video ${videoId}`);
+      res.end(cachedSegment);
+    } else {
+      // Stream from file and cache if possible
+      const file = fs.createReadStream(videoPath, { start: startByte, end: endByte });
+      file.pipe(res);
+      
+      // Cache this segment for future requests
+      videoCache.cacheSegmentFromFile(
+        videoId,
+        segmentNumber,
+        videoPath,
+        startByte,
+        endByte
+      ).catch(err => console.error(`Error caching segment ${segmentNumber} for video ${videoId}:`, err));
+    }
+    
+  } catch (error) {
+    console.error(`Error serving segment ${req.params.segmentNumber} for video ${req.params.id}:`, error);
+    res.status(500).json({ error: 'Failed to serve video segment' });
+  }
+});
+
 // SSE Endpoint is now handled directly in server.js before authentication middleware
 
 module.exports = router;
