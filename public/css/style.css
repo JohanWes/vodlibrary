@@ -1122,3 +1122,105 @@ footer p {
   pointer-events: none; /* Prevent interference with seeking */
   transform: translateX(-50%); /* Center the marker on its percentage */
 }
+
+/* Video Hover Preview Styles */
+.thumbnail-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.thumbnail-container video {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: 2;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
+}
+
+/* Preview loading indicator */
+.video-card.preview-loading::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--accent-color);
+  border-top: 2px solid transparent;
+  border-radius: 50%;
+  animation: preview-loading-spin 1s linear infinite;
+  z-index: 3;
+}
+
+@keyframes preview-loading-spin {
+  0% { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* Enhanced fallback preview styles */
+.video-card.preview-fallback .thumbnail {
+  filter: brightness(1.1) saturate(1.1);
+  transform: scale(1.05);
+}
+
+/* Preview quality indicator */
+.preview-quality-indicator {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background-color: rgba(0, 0, 0, 0.7);
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  font-size: 10px;
+  font-weight: 500;
+  z-index: 4;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.video-card:hover .preview-quality-indicator {
+  opacity: 1;
+}
+
+/* Responsive preview styles */
+@media (max-width: 768px) {
+  /* Disable hover previews on mobile for performance */
+  .video-card video {
+    display: none !important;
+  }
+  
+  /* Keep enhanced thumbnail fallback on mobile */
+  .video-card:active .thumbnail {
+    transform: scale(1.02);
+    filter: brightness(1.05);
+  }
+}
+
+/* Reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .thumbnail-container video {
+    transition: none;
+  }
+  
+  .video-card.preview-loading::before {
+    animation: none;
+  }
+  
+  .thumbnail {
+    transition: none;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .preview-quality-indicator {
+    background-color: #000;
+    border: 1px solid #fff;
+  }
+}

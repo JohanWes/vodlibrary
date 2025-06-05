@@ -5,6 +5,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Add utility styles
   addUtilStyles();
   
+  // Initialize video preview manager
+  let videoPreviewManager;
+  try {
+    videoPreviewManager = new window.VideoPreviewManager();
+    console.log('Video preview manager initialized successfully');
+  } catch (error) {
+    console.warn('Failed to initialize video preview manager:', error);
+  }
+  
   // Initialize video preloader
   try {
     await window.VideoPreloader.init();
@@ -384,6 +393,12 @@ document.addEventListener('DOMContentLoaded', async () => {
          window.VideoPreloader.cacheVideoMetadata(video.id, video);
       }
 
+      // Add preview functionality if preview manager is available
+      if (videoPreviewManager) {
+        videoPreviewManager.attachPreviewListeners(videoCard, video.id.toString());
+        videoPreviewManager.setupPreviewObserver(videoCard);
+      }
+
       return videoCard;
   }
   
@@ -706,6 +721,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Remove the card from the DOM
     const videoCard = videosGrid.querySelector(`.video-card[data-id="${videoId}"]`);
     if (videoCard) {
+      // Clean up preview functionality
+      if (videoPreviewManager) {
+        videoPreviewManager.removePreviewListeners(videoCard);
+        videoPreviewManager.hidePreview(videoCard, videoId);
+      }
+      
       videoCard.classList.add('fade-out'); // Add fade-out animation
       videoCard.addEventListener('animationend', () => {
           videoCard.remove();
