@@ -12,7 +12,7 @@ class VideoPreviewManager {
     this.previewCache = new Map(); // Cache preview metadata
     this.loadingPreviews = new Set();
     this.hoverTimeouts = new Map(); // Track hover timeouts
-    this.HOVER_DELAY = 800; // 800ms delay before showing preview
+    this.HOVER_DELAY = 500; // 500ms delay before showing preview
     
     // Performance monitoring
     this.performanceMetrics = {
