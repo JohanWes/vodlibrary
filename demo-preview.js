@@ -1,4 +1,4 @@
-const { initializeDatabase, getVideosPaginated } = require('./db/database');
+const { initializeDatabase, getVideosPaginated, updateVideoPreview } = require('./db/database');
 const { generatePreviewClips } = require('./lib/preview');
 const path = require('path');
 
@@ -11,41 +11,50 @@ async function demonstratePreviewFeature() {
     console.log('📂 Initializing database...');
     const db = await initializeDatabase();
     
-    // Get first video from database
-    console.log('🔍 Fetching videos from database...');
-    const { videos } = await getVideosPaginated(db, 1, 1);
+    // Get all videos from database
+    console.log('🔍 Fetching all videos from database...');
+    const { videos, totalCount } = await getVideosPaginated(db, 1, 99999); // Fetch all videos
     
-    if (videos.length === 0) {
+    if (totalCount === 0) {
       console.log('❌ No videos found. Please run the scanner first.');
       return;
     }
 
-    const video = videos[0];
-    console.log(`✅ Found video: "${video.title}"`);
-    console.log(`   Duration: ${video.duration} seconds`);
-    console.log(`   Path: ${video.path}`);
+    console.log(`✅ Found ${totalCount} videos in database.`);
 
-    // Check if preview clips already exist
-    if (video.preview_clips) {
-      console.log('✅ Preview clips already exist for this video:');
-      const previewData = JSON.parse(video.preview_clips);
-      previewData.clips.forEach((clip, index) => {
-        console.log(`   ${index + 1}. Timestamp: ${clip.timestamp}s, Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
-      });
-    } else {
-      console.log('🔄 Generating preview clips...');
-      
-      // Generate preview clips
-      const previewInfo = await generatePreviewClips(video.path, video.id, video.duration);
-      
-      if (previewInfo) {
-        console.log('✅ Preview clips generated successfully:');
-        previewInfo.clips.forEach((clip, index) => {
+    for (const video of videos) {
+      console.log(`\nProcessing video: "${video.title}" (ID: ${video.id})`);
+      console.log(`   Duration: ${video.duration} seconds`);
+      console.log(`   Path: ${video.path}`);
+
+      // Check if preview clips already exist
+      if (video.preview_clips && video.preview_generation_status === 'completed') {
+        console.log('✅ Preview clips already exist and are marked as completed for this video.');
+        const previewData = JSON.parse(video.preview_clips);
+        previewData.clips.forEach((clip, index) => {
           console.log(`   ${index + 1}. Timestamp: ${clip.timestamp}s, Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
         });
-        console.log(`   Total size: ${(previewInfo.total_size / 1024 / 1024).toFixed(2)}MB`);
       } else {
-        console.log('❌ Preview generation failed');
+        console.log('🔄 Generating preview clips...');
+        
+        // Generate preview clips
+        const previewInfo = await generatePreviewClips(video.path, video.id, video.duration);
+        
+        if (previewInfo) {
+          console.log('✅ Preview clips generated successfully:');
+          previewInfo.clips.forEach((clip, index) => {
+            console.log(`   ${index + 1}. Timestamp: ${clip.timestamp}s, Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
+          });
+          console.log(`   Total size: ${(previewInfo.total_size / 1024 / 1024).toFixed(2)}MB`);
+
+          // Update database with preview info
+          console.log('💾 Updating database with preview information...');
+          await updateVideoPreview(db, video.id, JSON.stringify(previewInfo), 'completed', new Date().toISOString());
+          console.log('✅ Database updated successfully.');
+        } else {
+          console.log('❌ Preview generation failed. Updating status to failed.');
+          await updateVideoPreview(db, video.id, null, 'failed', new Date().toISOString());
+        }
       }
     }
 
