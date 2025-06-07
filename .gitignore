@@ -3,6 +3,8 @@ node_modules/
 
 # Environment variables
 .env
+.env.test
+.env.local
 
 # Database files
 db/videos.db
@@ -27,9 +29,13 @@ lib-cov
 
 # Coverage directory used by tools like istanbul
 coverage
+coverage/
 
 # nyc test coverage
 .nyc_output
+
+# Jest coverage
+jest-coverage/
 
 # Dependency directories
 jspm_packages/
@@ -60,7 +66,15 @@ test-videos/
 
 # Other
 IMPLEMENTATION_SUMMARY.md
-CLAUDE.md
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 
 # Memory Bank
 memory-bank/
