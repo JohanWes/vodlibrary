@@ -56,6 +56,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   let sseEventSource = null; // Variable to hold the EventSource instance
   let hasScanRunThisSession = false; // Flag to track if scan initiated in this session
   let currentScrollTween = null; // To manage GSAP scroll animation
+  
+  // Video overlay variables
+  let overlayPlyrPlayer = null; // Plyr instance for overlay
+  let overlayCurrentVideoId = null; // Current video ID in overlay
+  let overlayVideoMetadata = null; // Current video metadata
+  let overlayBaseShareUrl = null; // Base share URL for current video
 
   /**
    * Debounce function
@@ -367,12 +373,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       const videoLink = videoCard.querySelector('.video-card-link');
       if (videoLink) {
           videoLink.addEventListener('click', (event) => {
-              // Check for middle click (button 1) or Ctrl+left click
+              // Check for middle click (button 1) or Ctrl+left click - open in new tab
               if (event.button === 1 || (event.button === 0 && event.ctrlKey)) {
-                  event.preventDefault(); // Prevent default navigation
+                  event.preventDefault();
                   window.open(videoLink.href, '_blank', 'noopener,noreferrer');
+              } else if (event.button === 0) {
+                  // Regular left click - open in overlay
+                  event.preventDefault();
+                  openVideoOverlay(video.id.toString(), event);
               }
-              // For regular left clicks (button 0 without Ctrl), let default behavior happen
           });
           
           // Also handle mousedown for middle click detection
@@ -806,6 +815,473 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ScrollTrigger.refresh(); 
   }
 
+  /**
+   * Video Overlay Functions
+   */
+  
+  /**
+   * Open video overlay with specified video ID
+   * @param {string} videoId - The ID of the video to open
+   * @param {Event} event - Optional event to prevent default behavior
+   */
+  async function openVideoOverlay(videoId, event) {
+    if (event) {
+      event.preventDefault();
+    }
+
+    try {
+      // Show loading state
+      const overlay = document.getElementById('video-overlay');
+      const playerContainer = document.querySelector('.video-overlay-player-container');
+      
+      // Add loading indicator
+      const loadingOverlay = document.createElement('div');
+      loadingOverlay.className = 'video-overlay-loading';
+      loadingOverlay.innerHTML = '<div class="loading-spinner"></div>';
+      playerContainer.appendChild(loadingOverlay);
+      
+      // Show overlay
+      overlay.classList.add('visible');
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('overlay-open');
+      
+      // Update URL
+      const newUrl = `/watch/${videoId}`;
+      history.pushState({ videoOverlay: true, videoId }, '', newUrl);
+      
+      // Load video metadata
+      let video = null;
+      try {
+        video = await window.VideoPreloader.getCachedMetadata(videoId);
+      } catch (error) {
+        console.warn('Error getting cached metadata:', error);
+      }
+      
+      if (!video) {
+        const response = await fetch(`/api/videos/${videoId}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch video');
+        }
+        video = await response.json();
+        
+        // Cache for future use
+        try {
+          await window.VideoPreloader.cacheVideoMetadata(videoId, video);
+        } catch (error) {
+          console.warn('Error caching video metadata:', error);
+        }
+      }
+      
+      // Store current video data
+      overlayCurrentVideoId = videoId;
+      overlayVideoMetadata = video;
+      overlayBaseShareUrl = null; // Reset share URL
+      
+      // Update overlay UI
+      document.getElementById('overlay-video-title').textContent = video.title;
+      
+      const addedDate = new Date(video.added_date);
+      document.getElementById('overlay-video-date').textContent = addedDate.toLocaleDateString();
+      document.getElementById('overlay-video-duration').textContent = video.duration_formatted;
+      
+      // Update page title
+      document.title = `${vodsName} - ${video.title}`;
+      
+      // Initialize video player
+      const overlayVideo = document.getElementById('overlay-video-player');
+      overlayVideo.src = `/api/videos/${videoId}/stream`;
+      
+      // Initialize Plyr
+      initializeOverlayPlayer(video);
+      
+      // Update favorite button state
+      updateOverlayFavoriteButton(videoId);
+      
+      // Focus on close button for accessibility
+      setTimeout(() => {
+        document.querySelector('.video-overlay-close').focus();
+      }, 100);
+      
+      // Preload additional segments
+      preloadOverlaySegments(videoId);
+      
+      // Remove loading overlay
+      setTimeout(() => {
+        if (loadingOverlay.parentNode) {
+          loadingOverlay.remove();
+        }
+      }, 500);
+      
+    } catch (error) {
+      console.error('Error opening video overlay:', error);
+      showToast('Failed to load video. Please try again.', 'error');
+      closeVideoOverlay();
+    }
+  }
+  
+  /**
+   * Close the video overlay
+   */
+  function closeVideoOverlay() {
+    const overlay = document.getElementById('video-overlay');
+    
+    // Hide overlay
+    overlay.classList.remove('visible');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('overlay-open');
+    
+    // Clean up Plyr player
+    if (overlayPlyrPlayer) {
+      try {
+        overlayPlyrPlayer.pause();
+        overlayPlyrPlayer.destroy();
+      } catch (error) {
+        console.warn('Error destroying Plyr player:', error);
+      }
+      overlayPlyrPlayer = null;
+    }
+    
+    // Clear video source
+    const overlayVideo = document.getElementById('overlay-video-player');
+    if (overlayVideo.src && overlayVideo.src.startsWith('blob:')) {
+      URL.revokeObjectURL(overlayVideo.src);
+    }
+    overlayVideo.src = '';
+    overlayVideo.load();
+    
+    // Reset state
+    overlayCurrentVideoId = null;
+    overlayVideoMetadata = null;
+    overlayBaseShareUrl = null;
+    
+    // Update URL back to home
+    history.pushState({}, '', '/');
+    
+    // Reset page title
+    document.title = vodsName;
+    
+    // Remove any loading overlays
+    const loadingOverlays = document.querySelectorAll('.video-overlay-loading');
+    loadingOverlays.forEach(overlay => overlay.remove());
+  }
+  
+  /**
+   * Initialize Plyr player for overlay
+   * @param {Object} video - Video metadata object
+   */
+  function initializeOverlayPlayer(video) {
+    // Destroy existing player
+    if (overlayPlyrPlayer) {
+      try {
+        overlayPlyrPlayer.destroy();
+      } catch (error) {
+        console.warn('Error destroying previous Plyr instance:', error);
+      }
+    }
+    
+    const overlayVideo = document.getElementById('overlay-video-player');
+    
+    // Plyr options (similar to player.js)
+    const options = {
+      controls: [
+        'play-large',
+        'play',
+        'progress',
+        'current-time',
+        'duration',
+        'mute',
+        'volume',
+        'captions',
+        'settings',
+        'pip',
+        'airplay',
+        'fullscreen'
+      ],
+      settings: ['captions', 'quality', 'speed', 'loop'],
+      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+      keyboard: { focused: true, global: false }, // Disable global shortcuts when in overlay
+      tooltips: { controls: true, seek: true },
+      autoplay: true
+    };
+    
+    overlayPlyrPlayer = new Plyr(overlayVideo, options);
+    
+    overlayPlyrPlayer.on('ready', () => {
+      console.log('Overlay Plyr player ready');
+      
+      // Check for timestamp parameter in URL
+      const urlParams = new URLSearchParams(window.location.search);
+      const startTime = urlParams.get('t');
+      if (startTime) {
+        const timeInSeconds = parseInt(startTime, 10);
+        if (!isNaN(timeInSeconds) && timeInSeconds > 0) {
+          setTimeout(() => {
+            try {
+              overlayPlyrPlayer.currentTime = timeInSeconds;
+            } catch (error) {
+              console.error('Error seeking to timestamp:', error);
+            }
+          }, 100);
+        }
+      }
+    });
+    
+    // Handle metadata loaded for death markers
+    overlayPlyrPlayer.on('loadedmetadata', () => {
+      if (video.death_timestamps && overlayPlyrPlayer.duration) {
+        try {
+          const deathTimestamps = JSON.parse(video.death_timestamps);
+          if (Array.isArray(deathTimestamps)) {
+            displayOverlayDeathMarkers(deathTimestamps, overlayPlyrPlayer.duration);
+          }
+        } catch (error) {
+          console.error('Error parsing death timestamps:', error);
+        }
+      }
+    });
+    
+    overlayPlyrPlayer.on('error', (event) => {
+      console.error('Overlay player error:', event);
+      showToast('Error playing video. Please try again.', 'error');
+    });
+  }
+  
+  /**
+   * Display death markers on overlay player timeline
+   * @param {number[]} timestamps - Array of death timestamps in seconds
+   * @param {number} duration - Video duration in seconds
+   */
+  function displayOverlayDeathMarkers(timestamps, duration) {
+    if (!duration || duration <= 0 || !timestamps || timestamps.length === 0) {
+      return;
+    }
+    
+    const playerContainer = document.querySelector('.video-overlay-player-container');
+    const progressTrack = playerContainer.querySelector('.plyr__progress input[type=range]');
+    
+    let progressElement;
+    if (!progressTrack) {
+      const progressContainer = playerContainer.querySelector('.plyr__progress__container');
+      if (!progressContainer) {
+        console.warn('Could not find progress container for death markers');
+        return;
+      }
+      progressElement = progressContainer;
+    } else {
+      progressElement = progressTrack.parentElement;
+    }
+    
+    // Clear existing markers
+    const existingMarkers = progressElement.querySelectorAll('.death-marker');
+    existingMarkers.forEach(marker => marker.remove());
+    
+    // Add new markers
+    timestamps.forEach(timestamp => {
+      if (timestamp >= 0 && timestamp <= duration) {
+        const percentage = (timestamp / duration) * 100;
+        const marker = document.createElement('div');
+        marker.className = 'death-marker';
+        marker.style.left = `${percentage}%`;
+        marker.title = `Death at ${formatOverlayTime(timestamp)}`;
+        progressElement.appendChild(marker);
+      }
+    });
+  }
+  
+  /**
+   * Format time for overlay display
+   * @param {number} seconds - Time in seconds
+   * @returns {string} Formatted time string
+   */
+  function formatOverlayTime(seconds) {
+    const date = new Date(0);
+    date.setSeconds(seconds);
+    const timeString = date.toISOString().substr(11, 8);
+    return timeString.startsWith('00:') ? timeString.substr(3) : timeString;
+  }
+  
+  /**
+   * Update overlay favorite button state
+   * @param {string} videoId - Video ID
+   */
+  function updateOverlayFavoriteButton(videoId) {
+    const favoriteBtn = document.getElementById('overlay-favorite-btn');
+    const favoriteText = favoriteBtn.querySelector('.favorite-text');
+    const isFavorited = isFavorite(videoId);
+    
+    if (isFavorited) {
+      favoriteBtn.classList.add('active');
+      favoriteText.textContent = 'Remove from Favorites';
+    } else {
+      favoriteBtn.classList.remove('active');
+      favoriteText.textContent = 'Add to Favorites';
+    }
+  }
+  
+  /**
+   * Handle overlay favorite button click
+   */
+  function handleOverlayFavoriteClick() {
+    if (!overlayCurrentVideoId) return;
+    
+    const isNowFavorited = toggleFavorite(overlayCurrentVideoId);
+    updateOverlayFavoriteButton(overlayCurrentVideoId);
+    
+    showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
+    
+    // Update the main grid if this video is visible
+    const gridCard = document.querySelector(`.video-card[data-id="${overlayCurrentVideoId}"]`);
+    if (gridCard) {
+      const gridIndicator = gridCard.querySelector('.favorite-indicator-grid');
+      if (gridIndicator) {
+        gridIndicator.classList.toggle('favorited', isNowFavorited);
+      }
+    }
+  }
+  
+  /**
+   * Preload segments for overlay video
+   * @param {string} videoId - Video ID
+   */
+  async function preloadOverlaySegments(videoId) {
+    try {
+      if (window.VideoPreloader) {
+        for (let i = 1; i <= 3; i++) {
+          try {
+            await window.VideoPreloader.preloadSegment(videoId, i);
+          } catch (error) {
+            console.warn(`Error preloading segment ${i}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('Error preloading overlay segments:', error);
+    }
+  }
+  
+  /**
+   * Handle browser back/forward navigation
+   */
+  function handleOverlayPopState(event) {
+    const currentPath = window.location.pathname;
+    const watchMatch = currentPath.match(/^\/watch\/(\d+)$/);
+    
+    if (watchMatch) {
+      // URL indicates we should show overlay
+      const videoId = watchMatch[1];
+      if (!overlayCurrentVideoId || overlayCurrentVideoId !== videoId) {
+        openVideoOverlay(videoId);
+      }
+    } else {
+      // URL indicates we should close overlay
+      if (overlayCurrentVideoId) {
+        closeVideoOverlay();
+      }
+    }
+  }
+
+  /**
+   * Share functionality for overlay
+   */
+  
+  /**
+   * Toggle overlay share popover visibility
+   */
+  function toggleOverlaySharePopover() {
+    const sharePopover = document.getElementById('overlay-share-popover');
+    const currentTimeDisplay = document.getElementById('overlay-popover-current-time');
+    
+    const isVisible = sharePopover.classList.toggle('visible');
+    
+    if (isVisible && overlayPlyrPlayer) {
+      const currentTime = Math.round(overlayPlyrPlayer.currentTime);
+      currentTimeDisplay.textContent = `Current time: ${formatOverlayTime(currentTime)}`;
+    }
+  }
+  
+  /**
+   * Copy base share link (without timestamp)
+   */
+  async function handleOverlayCopyBaseLink() {
+    if (!overlayBaseShareUrl) {
+      await fetchOverlayBaseShareUrl();
+      if (!overlayBaseShareUrl) {
+        showToast('Could not get share link.', 'error');
+        return;
+      }
+    }
+    
+    copyOverlayToClipboard(overlayBaseShareUrl, document.getElementById('overlay-copy-base-link-btn'));
+    document.getElementById('overlay-share-popover').classList.remove('visible');
+  }
+  
+  /**
+   * Copy timestamped share link
+   */
+  async function handleOverlayCopyTimestampLink() {
+    if (!overlayPlyrPlayer || typeof overlayPlyrPlayer.currentTime === 'undefined') {
+      showToast('Player not ready.', 'error');
+      return;
+    }
+    
+    if (!overlayBaseShareUrl) {
+      await fetchOverlayBaseShareUrl();
+      if (!overlayBaseShareUrl) {
+        showToast('Could not get share link.', 'error');
+        return;
+      }
+    }
+    
+    const currentTime = Math.round(overlayPlyrPlayer.currentTime);
+    const timestampedUrl = `${overlayBaseShareUrl}?t=${currentTime}`;
+    
+    copyOverlayToClipboard(timestampedUrl, document.getElementById('overlay-copy-timestamp-link-btn'));
+    document.getElementById('overlay-share-popover').classList.remove('visible');
+  }
+  
+  /**
+   * Fetch base share URL for current overlay video
+   */
+  async function fetchOverlayBaseShareUrl() {
+    if (overlayBaseShareUrl || !overlayCurrentVideoId) return;
+    
+    try {
+      const response = await fetch(`/api/share/${overlayCurrentVideoId}`);
+      if (!response.ok) {
+        throw new Error('Failed to generate share link');
+      }
+      const data = await response.json();
+      overlayBaseShareUrl = data.shareLink;
+    } catch (error) {
+      console.error('Error generating overlay share link:', error);
+      overlayBaseShareUrl = null;
+    }
+  }
+  
+  /**
+   * Copy text to clipboard with feedback
+   * @param {string} text - Text to copy
+   * @param {HTMLElement} buttonElement - Button that was clicked
+   */
+  function copyOverlayToClipboard(text, buttonElement) {
+    navigator.clipboard.writeText(text).then(() => {
+      const originalText = buttonElement.textContent;
+      buttonElement.textContent = 'Copied!';
+      buttonElement.disabled = true;
+      showToast('Link copied to clipboard!', 'success');
+      setTimeout(() => {
+        buttonElement.textContent = originalText;
+        buttonElement.disabled = false;
+      }, 2000);
+    }).catch(err => {
+      console.error('Failed to copy text:', err);
+      showToast('Failed to copy link.', 'error');
+    });
+  }
+
+  // Make overlay functions globally available
+  window.openVideoOverlay = openVideoOverlay;
+  window.closeVideoOverlay = closeVideoOverlay;
 
   // --- Event Listeners ---
   searchInput.addEventListener('focus', () => searchInput.parentElement.classList.add('focused'));
@@ -815,6 +1291,35 @@ document.addEventListener('DOMContentLoaded', async () => {
   searchInput.addEventListener('input', handleSearchInput);
   favoritesToggle.addEventListener('change', handleFavoritesToggle);
   window.addEventListener('scroll', handleInfiniteScroll); // Add scroll listener
+  
+  // Video overlay event listeners
+  document.getElementById('overlay-favorite-btn').addEventListener('click', handleOverlayFavoriteClick);
+  document.getElementById('overlay-share-toggle-btn').addEventListener('click', toggleOverlaySharePopover);
+  document.getElementById('overlay-copy-base-link-btn').addEventListener('click', handleOverlayCopyBaseLink);
+  document.getElementById('overlay-copy-timestamp-link-btn').addEventListener('click', handleOverlayCopyTimestampLink);
+  window.addEventListener('popstate', handleOverlayPopState);
+  
+  // Close share popover on outside click
+  document.addEventListener('click', (event) => {
+    const sharePopover = document.getElementById('overlay-share-popover');
+    const shareButton = document.getElementById('overlay-share-toggle-btn');
+    if (sharePopover.classList.contains('visible') && 
+        !sharePopover.contains(event.target) && 
+        !shareButton.contains(event.target)) {
+      sharePopover.classList.remove('visible');
+    }
+  });
+  
+  // Keyboard navigation for overlay
+  document.addEventListener('keydown', (event) => {
+    const overlay = document.getElementById('video-overlay');
+    if (overlay.classList.contains('visible')) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeVideoOverlay();
+      }
+    }
+  });
 
   // --- Initial Load ---
   loadVideos(currentPage, false); // Initial load of page 1
@@ -822,6 +1327,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   pollScanStatus(); // Check initial scan status on page load
   connectSSE(); // Connect to Server-Sent Events
   initializeGsapSmoothScroll(); // Initialize GSAP smooth scrolling
+  
+  // Handle direct URL navigation to video overlay
+  const currentPath = window.location.pathname;
+  const watchMatch = currentPath.match(/^\/watch\/(\d+)$/);
+  if (watchMatch) {
+    const videoId = watchMatch[1];
+    // Wait for page to load before opening overlay
+    setTimeout(() => {
+      openVideoOverlay(videoId);
+    }, 500);
+  }
 
   // Add focus styles dynamically
   const style = document.createElement('style');
