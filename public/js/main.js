@@ -343,7 +343,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             </div>
             <div class="video-info">
               <div class="video-title">${video.title}</div>
-              <div class="video-date">${formattedDate}</div>
             </div>
         </a>
         <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>

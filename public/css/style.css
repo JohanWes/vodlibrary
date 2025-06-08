@@ -657,7 +657,7 @@ select option:hover, select option:focus {
 }
 
 .video-info {
-  padding: 24px;
+  padding: 16px 20px;
   position: relative;
   z-index: 2;
 }
@@ -665,7 +665,7 @@ select option:hover, select option:focus {
 .video-title {
   font-size: 18px;
   font-weight: var(--font-weight-semibold);
-  margin-bottom: 12px;
+  margin-bottom: 6px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
