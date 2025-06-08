@@ -41,6 +41,7 @@ npm run test:coverage
 - **lib/cache.js**: Server-side video segment caching system
 - **lib/cdn.js**: CDN abstraction layer supporting multiple providers
 - **lib/thumbnail.js**: Video thumbnail generation using FFmpeg
+- **lib/preview.js**: Hardware-accelerated video preview generation
 - **routes/api.js**: REST API endpoints for video operations
 - **public/**: Static web assets (HTML, CSS, JS)
 
@@ -51,6 +52,7 @@ npm run test:coverage
 - **Authentication system**: Optional session-based authentication with cookie support
 - **Video streaming**: Range-request support with intelligent caching for performance
 - **Thumbnail generation**: Automatic thumbnail creation using FFmpeg at configurable timestamps
+- **Hardware-accelerated video previews**: Generates 10-second AV1 previews using GPU (with H.264 fallback) for hover functionality.
 - **CDN integration**: Support for multiple CDN providers with signed URL capability
 
 ### Configuration
