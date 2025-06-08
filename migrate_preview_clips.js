@@ -38,38 +38,38 @@ async function migratePreviewsToAV1() {
         const previewData = JSON.parse(video.preview_clips);
         let needsMigration = false;
         
-        // Check if any existing clips are H.264 (need migration to AV1)
-        for (const clip of previewData.clips) {
+        const clip = previewData.clips[0];
+        if (clip) {
           const clipPath = path.join(__dirname, 'public', clip.path);
           if (fs.existsSync(clipPath)) {
             try {
               const codecInfo = await getVideoCodec(clipPath);
               if (codecInfo.codec !== 'av1') {
                 needsMigration = true;
-                console.log(`   📹 Found ${codecInfo.codec} clip at ${clip.timestamp}s - needs migration`);
-                break;
+                console.log(`   📹 Found ${codecInfo.codec} clip - needs migration`);
               }
             } catch (error) {
               console.log(`   ⚠️  Could not detect codec for ${clip.path}, assuming migration needed`);
               needsMigration = true;
-              break;
             }
           } else {
             console.log(`   ❌ Missing clip file: ${clip.path}`);
             needsMigration = true;
-            break;
           }
+        } else {
+          needsMigration = true;
         }
 
         if (needsMigration) {
           console.log('🔄 Migrating to AV1 high quality...');
           
-          // Delete old preview clips
-          for (const clip of previewData.clips) {
-            const clipPath = path.join(__dirname, 'public', clip.path);
+          // Delete old preview clip
+          const oldClip = previewData.clips[0];
+          if (oldClip) {
+            const clipPath = path.join(__dirname, 'public', oldClip.path);
             if (fs.existsSync(clipPath)) {
               fs.unlinkSync(clipPath);
-              console.log(`   🗑️  Deleted old clip: ${clip.path}`);
+              console.log(`   🗑️  Deleted old clip: ${oldClip.path}`);
             }
           }
           
@@ -78,10 +78,8 @@ async function migratePreviewsToAV1() {
           
           if (previewInfo) {
             console.log('✅ AV1 migration successful:');
-            previewInfo.clips.forEach((clip, index) => {
-              console.log(`   ${index + 1}. Timestamp: ${clip.timestamp}s, Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
-            });
-            console.log(`   Total size: ${(previewInfo.total_size / 1024 / 1024).toFixed(2)}MB`);
+            const clip = previewInfo.clips[0];
+            console.log(`   Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
 
             // Update database with new preview info
             await updateVideoPreview(db, video.id, JSON.stringify(previewInfo), 'completed', new Date().toISOString());
@@ -103,10 +101,8 @@ async function migratePreviewsToAV1() {
         
         if (previewInfo) {
           console.log('✅ AV1 generation successful:');
-          previewInfo.clips.forEach((clip, index) => {
-            console.log(`   ${index + 1}. Timestamp: ${clip.timestamp}s, Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
-          });
-          console.log(`   Total size: ${(previewInfo.total_size / 1024 / 1024).toFixed(2)}MB`);
+          const clip = previewInfo.clips[0];
+          console.log(`   Path: ${clip.path}, Size: ${(clip.size / 1024 / 1024).toFixed(2)}MB`);
 
           // Update database with preview info
           await updateVideoPreview(db, video.id, JSON.stringify(previewInfo), 'completed', new Date().toISOString());
