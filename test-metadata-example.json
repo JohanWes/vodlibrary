@@ -1,0 +1,160 @@
+{
+  "category": "Mythic+",
+  "zoneID": 2097,
+  "mapID": 370,
+  "duration": 1567.919,
+  "result": false,
+  "upgradeLevel": 0,
+  "player": {
+    "_GUID": "Player-3682-0B2FEB45",
+    "_teamID": 1,
+    "_specID": 62,
+    "_name": "Evandis",
+    "_realm": "Ragnaros"
+  },
+  "challengeModeTimeline": [
+    {
+      "segmentType": "Trash",
+      "logStart": "2025-07-07T18:24:45.000Z",
+      "logEnd": "2025-07-07T18:26:14.000Z",
+      "timestamp": 0
+    },
+    {
+      "segmentType": "Boss",
+      "logStart": "2025-07-07T18:26:14.000Z",
+      "logEnd": "2025-07-07T18:29:48.000Z",
+      "timestamp": 89,
+      "encounterId": 2257
+    },
+    {
+      "segmentType": "Trash",
+      "logStart": "2025-07-07T18:29:48.000Z",
+      "logEnd": "2025-07-07T18:33:01.000Z",
+      "timestamp": 303
+    },
+    {
+      "segmentType": "Boss",
+      "logStart": "2025-07-07T18:33:01.000Z",
+      "logEnd": "2025-07-07T18:36:28.000Z",
+      "timestamp": 496,
+      "encounterId": 2258
+    },
+    {
+      "segmentType": "Trash",
+      "logStart": "2025-07-07T18:36:28.000Z",
+      "logEnd": "2025-07-07T18:39:22.000Z",
+      "timestamp": 703
+    },
+    {
+      "segmentType": "Boss",
+      "logStart": "2025-07-07T18:39:22.000Z",
+      "logEnd": "2025-07-07T18:42:23.000Z",
+      "timestamp": 877,
+      "encounterId": 2259
+    },
+    {
+      "segmentType": "Trash",
+      "logStart": "2025-07-07T18:42:23.000Z",
+      "logEnd": "2025-07-07T18:47:40.000Z",
+      "timestamp": 1058
+    },
+    {
+      "segmentType": "Boss",
+      "logStart": "2025-07-07T18:47:40.000Z",
+      "logEnd": "2025-07-07T18:47:40.000Z",
+      "timestamp": 1375,
+      "encounterId": 2260
+    }
+  ],
+  "keystoneLevel": 20,
+  "flavour": "Retail",
+  "overrun": 0,
+  "combatants": [
+    {
+      "_GUID": "Player-3674-0B48515F",
+      "_teamID": 1,
+      "_specID": 581,
+      "_name": "Dhchevyi",
+      "_realm": "TwistingNether"
+    },
+    {
+      "_GUID": "Player-3391-0D28A51B",
+      "_teamID": 1,
+      "_specID": 252,
+      "_name": "Arstok",
+      "_realm": "Silvermoon"
+    },
+    {
+      "_GUID": "Player-1305-0CE26EF2",
+      "_teamID": 1,
+      "_specID": 102,
+      "_name": "Zevdudu",
+      "_realm": "Kazzak"
+    },
+    {
+      "_GUID": "Player-1403-0AEE7220",
+      "_teamID": 1,
+      "_specID": 256,
+      "_name": "Vennywraith",
+      "_realm": "Draenor"
+    },
+    {
+      "_GUID": "Player-3682-0B2FEB45",
+      "_teamID": 1,
+      "_specID": 62,
+      "_name": "Evandis",
+      "_realm": "Ragnaros"
+    }
+  ],
+  "affixes": [
+    10,
+    9,
+    147
+  ],
+  "deaths": [
+    {
+      "name": "Evandis-Ragnaros-EU",
+      "specId": 62,
+      "date": "2025-07-07T18:39:54.000Z",
+      "timestamp": 908.9979999065399,
+      "friendly": true
+    },
+    {
+      "name": "Evandis-Ragnaros-EU",
+      "specId": 62,
+      "date": "2025-07-07T18:41:48.000Z",
+      "timestamp": 1022.9979999065399,
+      "friendly": true
+    },
+    {
+      "name": "Zevdudu-Kazzak-EU",
+      "specId": 102,
+      "date": "2025-07-07T18:42:17.000Z",
+      "timestamp": 1051.99799990654,
+      "friendly": true
+    },
+    {
+      "name": "Dhchevyi-TwistingNether-EU",
+      "specId": 581,
+      "date": "2025-07-07T18:50:29.000Z",
+      "timestamp": 1543.99799990654,
+      "friendly": true
+    },
+    {
+      "name": "Arstok-Silvermoon-EU",
+      "specId": 252,
+      "date": "2025-07-07T18:50:40.000Z",
+      "timestamp": 1554.99799990654,
+      "friendly": true
+    },
+    {
+      "name": "Vennywraith-Draenor-EU",
+      "specId": 256,
+      "date": "2025-07-07T18:50:42.000Z",
+      "timestamp": 1556.99799990654,
+      "friendly": true
+    }
+  ],
+  "start": 1751912685000,
+  "uniqueHash": "ac97bb7c8f607d02bd3c58dba898c245"
+}

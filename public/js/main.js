@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const refreshBtn = document.getElementById('refresh-btn');
   const sortSelect = document.getElementById('sort-select');
   const searchInput = document.getElementById('search-input');
+  const advancedSearchToggle = document.getElementById('advanced-search-toggle');
   const favoritesToggle = document.getElementById('favorites-toggle');
   const scanStatusElement = document.getElementById('scan-status'); // Get scan status element
   const loadingIndicator = document.createElement('div'); // Create loading indicator dynamically
@@ -47,6 +48,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let searchTimeout = null;
   let isLoading = false;
   let showOnlyFavorites = false;
+  let useAdvancedSearch = false;
   let currentPage = 1;
   let totalPages = 1;
   let limit = 20; // Default limit, will be updated from API response - Reduced batch size for better scrolling performance
@@ -106,14 +108,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     try {
-      let url = `/api/videos?page=${page}&limit=${limit}&sort=${sortBy}`; // Include sort
-      if (searchQuery) {
-        url += `&search=${encodeURIComponent(searchQuery)}`;
+      let response;
+      
+      if (useAdvancedSearch && searchQuery) {
+        // Use advanced search endpoint
+        response = await fetch('/api/videos/advanced-search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            query: searchQuery,
+            page: page,
+            limit: limit
+          }),
+          signal
+        });
+      } else {
+        // Use regular search endpoint
+        let url = `/api/videos?page=${page}&limit=${limit}&sort=${sortBy}`; // Include sort
+        if (searchQuery) {
+          url += `&search=${encodeURIComponent(searchQuery)}`;
+        }
+        response = await fetch(url, { signal });
       }
       
-      const response = await fetch(url, { signal }); // Pass the signal
-      
       if (!response.ok) {
+        // Check if this is an advanced search failure that should fallback
+        if (useAdvancedSearch && searchQuery && (response.status === 503 || response.status >= 500)) {
+          try {
+            const errorData = await response.json();
+            if (errorData.fallback) {
+              console.warn('Advanced search failed, falling back to regular search');
+              // Retry with regular search
+              useAdvancedSearch = false;
+              if (advancedSearchToggle) advancedSearchToggle.checked = false;
+              return loadVideos(page, append);
+            }
+          } catch (parseError) {
+            // Continue with regular error handling
+          }
+        }
+        
         if (response.status === 404 && searchQuery) { // Handle no search results gracefully
              if (!append) videosGrid.innerHTML = '<div class="loading">No videos found matching your search.</div>';
              totalPages = 0;
@@ -288,6 +324,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Re-render based on the currently loaded 'allVideos' array
     videosGrid.innerHTML = ''; // Clear grid before re-rendering filtered list
     renderVideos(allVideos, false); // Render the filtered subset of loaded videos
+  }
+
+  /**
+   * Handle advanced search toggle
+   */
+  function handleAdvancedSearchToggle(event) {
+    useAdvancedSearch = event.target.checked;
+    
+    // Update search input placeholder to indicate advanced mode
+    if (useAdvancedSearch) {
+      searchInput.placeholder = "Describe what you're looking for (e.g., 'find Cinderbrew Meadery with Evandis deaths')...";
+    } else {
+      searchInput.placeholder = "Search videos...";
+    }
+    
+    // If there's a current search query, re-run the search with the new mode
+    if (searchQuery) {
+      currentPage = 1; // Reset to first page
+      loadVideos(currentPage, false); // Re-search with the new mode
+    }
   }
 
   /**
@@ -1289,6 +1345,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   sortSelect.addEventListener('change', handleSortChange);
   searchInput.addEventListener('input', handleSearchInput);
   favoritesToggle.addEventListener('change', handleFavoritesToggle);
+  if (advancedSearchToggle) {
+    advancedSearchToggle.addEventListener('change', handleAdvancedSearchToggle);
+  }
   window.addEventListener('scroll', handleInfiniteScroll); // Add scroll listener
   
   // Video overlay event listeners

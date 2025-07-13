@@ -5,9 +5,10 @@ const fs = require('fs');
 // Import scanLibrary and getScanStatus
 const { scanLibrary, getScanStatus } = require('../lib/scanner'); 
 // Import getVideosPaginated instead of getAllVideos
-const { getVideosPaginated, getVideoById } = require('../db/database'); 
+const { getVideosPaginated, getVideoById, getVideosWithMetadata } = require('../db/database'); 
 const videoCache = require('../lib/cache');
 const cdnManager = require('../lib/cdn');
+const OpenRouterClient = require('../lib/llm');
 
 // Helper function to format duration in seconds to MM:SS format
 function formatDuration(seconds) {
@@ -48,6 +49,85 @@ router.get('/videos', async (req, res) => {
   } catch (error) {
     console.error('Error fetching videos:', error);
     res.status(500).json({ error: 'Failed to fetch videos' });
+  }
+});
+
+// Advanced search endpoint using LLM
+router.post('/videos/advanced-search', async (req, res) => {
+  try {
+    const { query, page = 1, limit = 20 } = req.body;
+    
+    if (!query || typeof query !== 'string') {
+      return res.status(400).json({ error: 'Query is required and must be a string' });
+    }
+    
+    // Check if advanced search is enabled
+    const advancedSearchEnabled = process.env.ADVANCED_SEARCH_ENABLED === 'true';
+    if (!advancedSearchEnabled) {
+      return res.status(400).json({ error: 'Advanced search is not enabled' });
+    }
+    
+    const db = req.app.locals.db;
+    const llmClient = new OpenRouterClient();
+    
+    // Check if LLM is available
+    if (!llmClient.isAvailable()) {
+      return res.status(503).json({ 
+        error: 'Advanced search temporarily unavailable - OpenRouter API key not configured' 
+      });
+    }
+    
+    // Get all videos with metadata
+    const videosWithMetadata = await getVideosWithMetadata(db);
+    
+    if (videosWithMetadata.length === 0) {
+      return res.json({
+        videos: [],
+        totalCount: 0,
+        page: 1,
+        limit: limit,
+        message: 'No videos with metadata available for advanced search'
+      });
+    }
+    
+    // Use LLM to search
+    const matchedVideos = await llmClient.searchVideos(query, videosWithMetadata);
+    
+    // Paginate results
+    const totalCount = matchedVideos.length;
+    const startIndex = (page - 1) * limit;
+    const endIndex = startIndex + limit;
+    const paginatedVideos = matchedVideos.slice(startIndex, endIndex);
+    
+    // Format videos similar to regular search
+    const formattedVideos = paginatedVideos.map(video => {
+      return {
+        ...video,
+        duration_formatted: formatDuration(video.duration)
+      };
+    });
+    
+    res.json({
+      videos: formattedVideos,
+      totalCount: totalCount,
+      page: page,
+      limit: limit,
+      searchType: 'advanced',
+      query: query
+    });
+    
+  } catch (error) {
+    console.error('Advanced search error:', error);
+    
+    // Check if it's an LLM-specific error and provide fallback
+    if (error.message.includes('API') || error.message.includes('OpenRouter')) {
+      res.status(503).json({ 
+        error: 'Advanced search temporarily unavailable. Please try regular search.',
+        fallback: true
+      });
+    } else {
+      res.status(500).json({ error: 'Advanced search failed' });
+    }
   }
 });
 
