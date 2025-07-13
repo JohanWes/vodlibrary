@@ -365,9 +365,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (useAdvancedSearch) {
       searchInput.placeholder = "Describe what you're looking for (e.g., 'find Cinderbrew Meadery with Evandis deaths')...";
       searchContainer.classList.add('advanced-mode');
+      // Show search button for advanced mode
+      if (searchButton) searchButton.style.display = 'flex';
     } else {
       searchInput.placeholder = "Search videos...";
       searchContainer.classList.remove('advanced-mode');
+      // Hide search button for regular mode
+      if (searchButton) searchButton.style.display = 'none';
     }
     
     // If there's a current search query, re-run the search with the new mode

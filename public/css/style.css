@@ -134,7 +134,7 @@ header {
 
 .search-input {
   width: 100%;
-  padding: 0.75rem 140px 0.75rem 2.75rem; /* Updated right padding for button + toggle */
+  padding: 0.75rem 100px 0.75rem 2.75rem; /* Right padding for advanced toggle only */
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-color);
   background: var(--bg-tertiary);
@@ -162,42 +162,6 @@ header {
   opacity: 0.7;
 }
 
-/* Search button styles */
-.search-button {
-  position: absolute;
-  right: 100px; /* Position before the advanced toggle */
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 10;
-  background: var(--bg-quaternary);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
-  padding: 8px;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  color: var(--text-secondary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.search-button:hover {
-  background: var(--accent-color);
-  border-color: var(--accent-color);
-  color: white;
-  transform: translateY(-50%) scale(1.05);
-}
-
-.search-button:active {
-  transform: translateY(-50%) scale(0.95);
-}
-
-.search-button.searching {
-  background: var(--accent-color);
-  color: white;
-  animation: pulse 1s infinite;
-}
-
 /* Advanced search toggle styles */
 .advanced-search-container {
   position: absolute;
@@ -205,6 +169,42 @@ header {
   top: 50%;
   transform: translateY(-50%);
   z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Search button styles */
+.search-button {
+  background: var(--bg-quaternary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.search-button:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+  transform: scale(1.05);
+}
+
+.search-button:active {
+  transform: scale(0.95);
+}
+
+.search-button.searching {
+  background: var(--accent-color);
+  color: white;
+  animation: pulse 1s infinite;
 }
 
 .advanced-search-label {
