@@ -104,6 +104,11 @@ header {
   max-width: 400px;
   margin: 0 1rem;
   position: relative;
+  transition: max-width var(--transition-normal);
+}
+
+.search-container.advanced-mode {
+  max-width: 600px;
 }
 
 .search-icon {
@@ -129,7 +134,7 @@ header {
 
 .search-input {
   width: 100%;
-  padding: 0.75rem 100px 0.75rem 2.75rem; /* Updated right padding for advanced toggle */
+  padding: 0.75rem 140px 0.75rem 2.75rem; /* Updated right padding for button + toggle */
   border-radius: var(--radius-xl);
   border: 1px solid var(--border-color);
   background: var(--bg-tertiary);
@@ -155,6 +160,42 @@ header {
 .search-input::placeholder {
   color: var(--text-secondary);
   opacity: 0.7;
+}
+
+/* Search button styles */
+.search-button {
+  position: absolute;
+  right: 100px; /* Position before the advanced toggle */
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 10;
+  background: var(--bg-quaternary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.search-button:hover {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: white;
+  transform: translateY(-50%) scale(1.05);
+}
+
+.search-button:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.search-button.searching {
+  background: var(--accent-color);
+  color: white;
+  animation: pulse 1s infinite;
 }
 
 /* Advanced search toggle styles */

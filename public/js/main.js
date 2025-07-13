@@ -33,6 +33,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const refreshBtn = document.getElementById('refresh-btn');
   const sortSelect = document.getElementById('sort-select');
   const searchInput = document.getElementById('search-input');
+  const searchButton = document.getElementById('search-button');
   const advancedSearchToggle = document.getElementById('advanced-search-toggle');
   const favoritesToggle = document.getElementById('favorites-toggle');
   const scanStatusElement = document.getElementById('scan-status'); // Get scan status element
@@ -196,6 +197,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   function handleSearchInput(event) {
     searchQuery = event.target.value.trim();
     
+    // Skip auto-triggering for advanced search - require button press
+    if (useAdvancedSearch) {
+      return; // Don't auto-search in advanced mode
+    }
+    
     const searchIcon = document.querySelector('.search-icon');
     if (searchIcon) searchIcon.classList.add('searching');
     
@@ -207,6 +213,28 @@ document.addEventListener('DOMContentLoaded', async () => {
          if (searchIcon) searchIcon.classList.remove('searching');
       });
     }, 300); // 300ms debounce
+  }
+
+  /**
+   * Handle search button click (for advanced search)
+   */
+  function handleSearchButtonClick() {
+    searchQuery = searchInput.value.trim();
+    
+    if (!searchQuery && !useAdvancedSearch) {
+      // For regular search, allow empty query to show all videos
+      searchQuery = '';
+    }
+    
+    const searchIcon = document.querySelector('.search-icon');
+    if (searchButton) searchButton.classList.add('searching');
+    if (searchIcon) searchIcon.classList.add('searching');
+    
+    currentPage = 1; // Reset to first page for new search
+    loadVideos(currentPage, false).finally(() => { // Fetch page 1, don't append
+      if (searchButton) searchButton.classList.remove('searching');
+      if (searchIcon) searchIcon.classList.remove('searching');
+    });
   }
 
   /**
@@ -331,18 +359,31 @@ document.addEventListener('DOMContentLoaded', async () => {
    */
   function handleAdvancedSearchToggle(event) {
     useAdvancedSearch = event.target.checked;
+    const searchContainer = searchInput.parentElement;
     
     // Update search input placeholder to indicate advanced mode
     if (useAdvancedSearch) {
       searchInput.placeholder = "Describe what you're looking for (e.g., 'find Cinderbrew Meadery with Evandis deaths')...";
+      searchContainer.classList.add('advanced-mode');
     } else {
       searchInput.placeholder = "Search videos...";
+      searchContainer.classList.remove('advanced-mode');
     }
     
     // If there's a current search query, re-run the search with the new mode
     if (searchQuery) {
       currentPage = 1; // Reset to first page
       loadVideos(currentPage, false); // Re-search with the new mode
+    }
+  }
+
+  /**
+   * Handle Enter key press in search input
+   */
+  function handleSearchKeyPress(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleSearchButtonClick();
     }
   }
 
@@ -1344,6 +1385,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   refreshBtn.addEventListener('click', refreshLibrary);
   sortSelect.addEventListener('change', handleSortChange);
   searchInput.addEventListener('input', handleSearchInput);
+  searchInput.addEventListener('keypress', handleSearchKeyPress);
+  if (searchButton) {
+    searchButton.addEventListener('click', handleSearchButtonClick);
+  }
   favoritesToggle.addEventListener('change', handleFavoritesToggle);
   if (advancedSearchToggle) {
     advancedSearchToggle.addEventListener('change', handleAdvancedSearchToggle);
