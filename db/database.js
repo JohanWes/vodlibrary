@@ -78,8 +78,14 @@ async function initializeDatabase() {
                           if (err && !err.message.includes('duplicate column name')) {
                             return reject(err);
                           }
-                          // All steps completed successfully
-                          resolve(db);
+                          // Attempt to add metadata column (ignore duplicate error)
+                          db.run(`ALTER TABLE videos ADD COLUMN metadata TEXT`, (err) => {
+                            if (err && !err.message.includes('duplicate column name')) {
+                              return reject(err);
+                            }
+                            // All steps completed successfully
+                            resolve(db);
+                          });
                         });
                       });
                     });
@@ -198,11 +204,11 @@ function getVideoById(db, id) {
 function addVideo(db, video) {
   return new Promise((resolve, reject) => {
     // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date } = video;
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata } = video;
     
     db.run(
-      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date],
+      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata],
       function(err) {
         if (err) {
           reject(err);
@@ -288,11 +294,11 @@ function getVideoByPath(db, path) {
 function updateVideo(db, id, video) {
   return new Promise((resolve, reject) => {
     // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date } = video;
+    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata } = video;
     
     db.run(
-      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ?, preview_clips = ?, preview_generation_status = ?, preview_generation_date = ? WHERE id = ?',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, id],
+      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ?, preview_clips = ?, preview_generation_status = ?, preview_generation_date = ?, metadata = ? WHERE id = ?',
+      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata, id],
       function(err) {
         if (err) {
           reject(err);
@@ -334,6 +340,21 @@ function deleteVideo(db, id) {
   });
 }
 
+/**
+ * Get all videos that have metadata for advanced search
+ */
+function getVideosWithMetadata(db) {
+  return new Promise((resolve, reject) => {
+    db.all('SELECT id, title, path, duration, added_date, metadata FROM videos WHERE metadata IS NOT NULL AND metadata != ""', (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(rows);
+    });
+  });
+}
+
 module.exports = {
   initializeDatabase,
   getAllVideos,
@@ -346,5 +367,6 @@ module.exports = {
   updateVideo,
   getAllVideoPaths,
   deleteVideo,
-  getVideosPaginated
+  getVideosPaginated,
+  getVideosWithMetadata
 };
