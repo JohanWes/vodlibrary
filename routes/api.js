@@ -92,13 +92,33 @@ router.post('/videos/advanced-search', async (req, res) => {
     
     // Use LLM to search
     const matchedVideos = await llmClient.searchVideos(query, videosWithMetadata);
-    
-    // Paginate results
-    const totalCount = matchedVideos.length;
+
+    // Enrich LLM results with complete video data
+    const enrichedVideos = [];
+    for (const matchedVideo of matchedVideos) {
+      try {
+        // Fetch complete video record using existing getVideoById function
+        const completeVideo = await getVideoById(db, matchedVideo.id);
+        if (completeVideo) {
+          // Merge LLM search reasoning with complete video data
+          enrichedVideos.push({
+            ...completeVideo,
+            searchReason: matchedVideo.searchReason // Preserve LLM reasoning
+          });
+        }
+      } catch (error) {
+        console.warn(`Failed to enrich video ${matchedVideo.id}:`, error);
+        // Fallback to partial data if enrichment fails
+        enrichedVideos.push(matchedVideo);
+      }
+    }
+
+    // Paginate enriched results
+    const totalCount = enrichedVideos.length;
     const startIndex = (page - 1) * limit;
     const endIndex = startIndex + limit;
-    const paginatedVideos = matchedVideos.slice(startIndex, endIndex);
-    
+    const paginatedVideos = enrichedVideos.slice(startIndex, endIndex);
+
     // Format videos similar to regular search
     const formattedVideos = paginatedVideos.map(video => {
       return {
