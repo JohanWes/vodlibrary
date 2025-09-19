@@ -14,6 +14,8 @@ class VideoPreviewManager {
     this.hoverTimeouts = new Map(); // Track hover timeouts
     this.HOVER_DELAY = 500; // 500ms delay before showing preview
     
+    this.isSuspended = false;
+
     // Performance monitoring
     this.performanceMetrics = {
       totalPreviews: 0,
@@ -21,7 +23,54 @@ class VideoPreviewManager {
       failedPreviews: 0,
       averageLoadTime: 0
     };
-    
+
+    if (typeof window !== 'undefined') {
+      window.VideoUIEffects = window.VideoUIEffects || {};
+    }
+
+    const safeGetItem = (key) => {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (storageError) {
+        return null;
+      }
+    };
+
+    const safeSetItem = (key, value) => {
+      try {
+        if (value === null || typeof value === 'undefined') {
+          window.localStorage.removeItem(key);
+        } else {
+          window.localStorage.setItem(key, value);
+        }
+      } catch (storageError) {
+        // Ignore storage failures
+      }
+    };
+
+    const storedDebugPreference = typeof window !== 'undefined' ? safeGetItem('vod-preview-debug') : null;
+    this.debugEnabled = Boolean(window.VideoUIEffects && window.VideoUIEffects.previewDebug);
+
+    if (storedDebugPreference === 'true') {
+      this.debugEnabled = true;
+    } else if (storedDebugPreference === 'false') {
+      this.debugEnabled = false;
+    }
+
+    if (typeof window !== 'undefined' && window.VideoUIEffects) {
+      window.VideoUIEffects.previewDebug = this.debugEnabled;
+      window.VideoUIEffects.setPreviewDebug = (value) => {
+        if (typeof value === 'boolean') {
+          this.debugEnabled = value;
+          safeSetItem('vod-preview-debug', value ? 'true' : 'false');
+        } else {
+          this.debugEnabled = false;
+          safeSetItem('vod-preview-debug', null);
+        }
+        window.VideoUIEffects.previewDebug = this.debugEnabled;
+      };
+    }
+
     // Setup cleanup on page unload
     this.setupCleanup();
   }
@@ -35,10 +84,10 @@ class VideoPreviewManager {
     
     if (this.videoPool.length > 0) {
       video = this.videoPool.pop();
-      console.log(`[VideoPreview] Reusing video element from pool, current src: "${video.src}"`);
+      this.debugLog(`[VideoPreview] Reusing video element from pool, current src: "${video.src}"`);
     } else {
       video = document.createElement('video');
-      console.log(`[VideoPreview] Created new video element`);
+      this.debugLog(`[VideoPreview] Created new video element`);
     }
     
     // Always reset and configure the video element
@@ -62,7 +111,7 @@ class VideoPreviewManager {
       z-index: 2;
     `;
     
-    console.log(`[VideoPreview] Video element configured, src: "${video.src}"`);
+    this.debugLog(`[VideoPreview] Video element configured, src: "${video.src}"`);
     return video;
   }
 
@@ -94,18 +143,18 @@ class VideoPreviewManager {
    */
   async preloadPreviewInfo(videoId) {
     if (this.previewCache.has(videoId)) {
-      console.log(`[VideoPreview] Using cached preview info for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Using cached preview info for video ${videoId}`);
       return this.previewCache.get(videoId);
     }
 
     try {
       const startTime = performance.now();
       const apiUrl = `/api/videos/${videoId}/preview-info`;
-      console.log(`[VideoPreview] Fetching preview info from: ${apiUrl}`);
+      this.debugLog(`[VideoPreview] Fetching preview info from: ${apiUrl}`);
       
       const response = await fetch(apiUrl);
-      console.log(`[VideoPreview] API response status: ${response.status} ${response.statusText}`);
-      console.log(`[VideoPreview] API response headers:`, Object.fromEntries(response.headers.entries()));
+      this.debugLog(`[VideoPreview] API response status: ${response.status} ${response.statusText}`);
+      this.debug(() => this.debugLog(`[VideoPreview] API response headers:`, Object.fromEntries(response.headers.entries())));
       
       if (!response.ok) {
         const errorText = await response.text();
@@ -116,7 +165,7 @@ class VideoPreviewManager {
       const previewInfo = await response.json();
       const loadTime = performance.now() - startTime;
       
-      console.log(`[VideoPreview] Preview info loaded in ${loadTime.toFixed(2)}ms for video ${videoId}:`, previewInfo);
+      this.debugLog(`[VideoPreview] Preview info loaded in ${loadTime.toFixed(2)}ms for video ${videoId}:`, previewInfo);
       
       // Update performance metrics
       this.updatePerformanceMetrics(loadTime, true);
@@ -141,29 +190,35 @@ class VideoPreviewManager {
    * @param {string} videoId
    */
   async showPreview(cardElement, videoId) {
-    console.log(`[VideoPreview] Attempting to show preview for video ${videoId}`);
-    
+    this.debugLog(`[VideoPreview] Attempting to show preview for video ${videoId}`);
+
+    // Check if preview system is suspended
+    if (this.isSuspended) {
+      this.debugLog(`[VideoPreview] Preview system is suspended, skipping preview for video ${videoId}`);
+      return;
+    }
+
     // Rate limiting - check concurrent previews
     if (this.activeVideos.size >= this.maxConcurrentPreviews) {
-      console.log(`[VideoPreview] Rate limited: ${this.activeVideos.size}/${this.maxConcurrentPreviews} active previews`);
+      this.debugLog(`[VideoPreview] Rate limited: ${this.activeVideos.size}/${this.maxConcurrentPreviews} active previews`);
       return;
     }
 
     // Check if already loading
     if (this.loadingPreviews.has(videoId)) {
-      console.log(`[VideoPreview] Already loading preview for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Already loading preview for video ${videoId}`);
       return;
     }
 
     this.loadingPreviews.add(videoId);
 
     try {
-      console.log(`[VideoPreview] Loading preview info for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Loading preview info for video ${videoId}`);
       const previewInfo = await this.preloadPreviewInfo(videoId);
-      console.log(`[VideoPreview] Preview info loaded for video ${videoId}:`, previewInfo);
+      this.debugLog(`[VideoPreview] Preview info loaded for video ${videoId}:`, previewInfo);
       
       if (!previewInfo.hasPreview || previewInfo.clips.length === 0) {
-        console.log(`[VideoPreview] No preview clips available for video ${videoId}, using fallback`);
+        this.debugLog(`[VideoPreview] No preview clips available for video ${videoId}, using fallback`);
         this.showFallbackPreview(cardElement, videoId);
         return;
       }
@@ -172,7 +227,7 @@ class VideoPreviewManager {
       const thumbnailContainer = cardElement.querySelector('.thumbnail-container');
       
       if (!thumbnailContainer) {
-        console.warn(`[VideoPreview] No thumbnail container found for video ${videoId}`);
+        this.debugWarn(`[VideoPreview] No thumbnail container found for video ${videoId}`);
         this.releaseVideoElement(video);
         return;
       }
@@ -184,12 +239,12 @@ class VideoPreviewManager {
       // Load and play preview
       const firstClip = previewInfo.clips[0];
       if (firstClip) {
-        console.log(`[VideoPreview] Loading clip for video ${videoId}:`, firstClip);
+        this.debugLog(`[VideoPreview] Loading clip for video ${videoId}:`, firstClip);
         
         // Use the API endpoint to serve the preview clip
         const videoSrc = `/api/videos/${videoId}/preview/${firstClip.timestamp}`;
-        console.log(`[VideoPreview] Setting video src to API endpoint: ${videoSrc}`);
-        console.log(`[VideoPreview] Original clip path was: ${firstClip.path}`);
+        this.debugLog(`[VideoPreview] Setting video src to API endpoint: ${videoSrc}`);
+        this.debugLog(`[VideoPreview] Original clip path was: ${firstClip.path}`);
         video.src = videoSrc;
         
         // Add enhanced error handling
@@ -222,7 +277,7 @@ class VideoPreviewManager {
         };
         
         const loadHandler = () => {
-          console.log(`[VideoPreview] Video loaded successfully for video ${videoId}, attempting to play`);
+          this.debugLog(`[VideoPreview] Video loaded successfully for video ${videoId}, attempting to play`);
           video.style.opacity = '1';
           video.play().catch((playError) => {
             console.error(`[VideoPreview] Play failed for video ${videoId}:`, playError);
@@ -240,21 +295,21 @@ class VideoPreviewManager {
         
         // Additional event listeners for debugging
         video.addEventListener('loadstart', () => {
-          console.log(`[VideoPreview] Load started for video ${videoId}, src: ${video.src}`);
+          this.debugLog(`[VideoPreview] Load started for video ${videoId}, src: ${video.src}`);
         }, { once: true });
         
         video.addEventListener('canplay', () => {
-          console.log(`[VideoPreview] Can play video ${videoId}`);
+          this.debugLog(`[VideoPreview] Can play video ${videoId}`);
         }, { once: true });
         
         video.addEventListener('canplaythrough', () => {
-          console.log(`[VideoPreview] Can play through video ${videoId}`);
+          this.debugLog(`[VideoPreview] Can play through video ${videoId}`);
         }, { once: true });
         
         // Add immediate verification of src setting
         setTimeout(() => {
-          console.log(`[VideoPreview] Video src verification for ${videoId}: ${video.src}`);
-          console.log(`[VideoPreview] Video currentSrc for ${videoId}: ${video.currentSrc}`);
+          this.debugLog(`[VideoPreview] Video src verification for ${videoId}: ${video.src}`);
+          this.debugLog(`[VideoPreview] Video currentSrc for ${videoId}: ${video.currentSrc}`);
         }, 10);
 
         this.activeVideos.set(videoId, { 
@@ -266,7 +321,7 @@ class VideoPreviewManager {
         
         this.performanceMetrics.totalPreviews++;
         this.performanceMetrics.successfulPreviews++;
-        console.log(`[VideoPreview] Preview setup complete for video ${videoId}`);
+        this.debugLog(`[VideoPreview] Preview setup complete for video ${videoId}`);
       }
 
     } catch (error) {
@@ -338,16 +393,22 @@ class VideoPreviewManager {
    * @param {string} videoId
    */
   handleHover(cardElement, videoId) {
-    console.log(`[VideoPreview] Hover detected for video ${videoId}, delay: ${this.HOVER_DELAY}ms`);
-    
+    this.debugLog(`[VideoPreview] Hover detected for video ${videoId}, delay: ${this.HOVER_DELAY}ms`);
+
+    // Check if preview system is suspended
+    if (this.isSuspended) {
+      this.debugLog(`[VideoPreview] Preview system is suspended, ignoring hover for video ${videoId}`);
+      return;
+    }
+
     // Clear any existing timeout
     if (this.hoverTimeouts.has(videoId)) {
-      console.log(`[VideoPreview] Clearing existing hover timeout for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Clearing existing hover timeout for video ${videoId}`);
       clearTimeout(this.hoverTimeouts.get(videoId));
     }
 
     const timeout = setTimeout(() => {
-      console.log(`[VideoPreview] Hover delay elapsed, triggering preview for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Hover delay elapsed, triggering preview for video ${videoId}`);
       this.showPreview(cardElement, videoId);
     }, this.HOVER_DELAY);
 
@@ -360,11 +421,11 @@ class VideoPreviewManager {
    * @param {string} videoId
    */
   handleMouseLeave(cardElement, videoId) {
-    console.log(`[VideoPreview] Mouse leave detected for video ${videoId}`);
+    this.debugLog(`[VideoPreview] Mouse leave detected for video ${videoId}`);
     
     // Clear hover timeout
     if (this.hoverTimeouts.has(videoId)) {
-      console.log(`[VideoPreview] Clearing hover timeout on mouse leave for video ${videoId}`);
+      this.debugLog(`[VideoPreview] Clearing hover timeout on mouse leave for video ${videoId}`);
       clearTimeout(this.hoverTimeouts.get(videoId));
       this.hoverTimeouts.delete(videoId);
     }
@@ -463,6 +524,65 @@ class VideoPreviewManager {
    */
   getPerformanceMetrics() {
     return { ...this.performanceMetrics };
+  }
+
+  debugLog(...args) {
+    if (!this.debugEnabled) {
+      return;
+    }
+    console.log(...args);
+  }
+
+  debugWarn(...args) {
+    if (!this.debugEnabled) {
+      return;
+    }
+    console.warn(...args);
+  }
+
+  debug(callback) {
+    if (!this.debugEnabled || typeof callback !== 'function') {
+      return;
+    }
+    callback();
+  }
+
+  /**
+   * Pause the video preview system
+   * Prevents new previews from starting and clears existing timeouts
+   */
+  pause() {
+    if (this.isSuspended) {
+      return; // Already paused
+    }
+
+    this.isSuspended = true;
+
+    // Clear all pending hover timeouts
+    this.hoverTimeouts.forEach(timeout => clearTimeout(timeout));
+    this.hoverTimeouts.clear();
+
+    // Pause all active video previews
+    this.activeVideos.forEach((activeVideo, videoId) => {
+      if (activeVideo.element && typeof activeVideo.element.pause === 'function') {
+        activeVideo.element.pause();
+      }
+    });
+
+    console.log('[VideoPreview] Preview system paused');
+  }
+
+  /**
+   * Resume the video preview system
+   * Allows new previews to start again
+   */
+  resume() {
+    if (!this.isSuspended) {
+      return; // Already running
+    }
+
+    this.isSuspended = false;
+    console.log('[VideoPreview] Preview system resumed');
   }
 
   /**
