@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Add utility styles
   addUtilStyles();
   
+  // Apply reduced-effects mode before heavy DOM work
+  applyLowEffectsModeIfNeeded();
+  
   // Initialize video preview manager
   let videoPreviewManager;
   try {
@@ -41,6 +44,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   loadingIndicator.className = 'loading';
   loadingIndicator.style.display = 'none';
   videosGrid.parentNode.appendChild(loadingIndicator); // Append near the grid
+
+  if (videosGrid) {
+    videosGrid.addEventListener('click', handleVideoGridClick);
+    videosGrid.addEventListener('auxclick', handleVideoGridAuxClick);
+    videosGrid.addEventListener('mousedown', handleVideoGridMouseDown);
+  }
 
   // State Variables
   let allVideos = []; // Holds all currently loaded videos across pages
@@ -91,6 +100,192 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   
+
+  /**
+   * Toggle low-effects mode based on user preference and media queries
+   */
+  function applyLowEffectsModeIfNeeded() {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const effectsConfig = window.VideoUIEffects || {};
+    window.VideoUIEffects = effectsConfig;
+
+    const supportsMatchMedia = typeof window.matchMedia === 'function';
+    const reduceMotionQuery = supportsMatchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    let reduceTransparencyQuery = null;
+    if (supportsMatchMedia) {
+      try {
+        reduceTransparencyQuery = window.matchMedia('(prefers-reduced-transparency: reduce)');
+      } catch (error) {
+        reduceTransparencyQuery = null;
+      }
+    }
+
+    const safeGetItem = (key) => {
+      try {
+        return window.localStorage.getItem(key);
+      } catch (storageError) {
+        return null;
+      }
+    };
+
+    const safeSetItem = (key, value) => {
+      try {
+        if (typeof value === 'string') {
+          window.localStorage.setItem(key, value);
+        } else {
+          window.localStorage.removeItem(key);
+        }
+      } catch (storageError) {
+        // Ignore storage failures (private mode, etc.)
+      }
+    };
+
+    const updateLowEffectsClass = () => {
+      const storedPreference = safeGetItem('vod-low-effects');
+      let shouldEnable = true; // Default to enabled for better performance
+
+      if (storedPreference === 'true') {
+        shouldEnable = true;
+      } else if (storedPreference === 'false') {
+        shouldEnable = false;
+      } else {
+        // Enable by default, but also check system preferences
+        const reduceMotion = reduceMotionQuery && reduceMotionQuery.matches;
+        const reduceTransparency = reduceTransparencyQuery && reduceTransparencyQuery.matches;
+        shouldEnable = true || Boolean(reduceMotion || reduceTransparency || effectsConfig.forceLowEffects);
+      }
+
+      document.body.classList.toggle('low-effects', shouldEnable);
+      effectsConfig.lowEffectsEnabled = shouldEnable;
+    };
+
+    /**
+     * Enable low effects mode programmatically
+     */
+    const enableLowEffectsMode = () => {
+      const effectsConfig = window.VideoUIEffects || {};
+      if (!effectsConfig.lowEffectsEnabled) {
+        safeSetItem('vod-low-effects', 'true');
+        document.body.classList.add('low-effects');
+        effectsConfig.lowEffectsEnabled = true;
+        console.log('[Performance] Low effects mode enabled for better performance');
+      }
+    };
+
+    // Make enableLowEffectsMode globally accessible
+    window.enableLowEffectsMode = enableLowEffectsMode;
+
+    const attachPreferenceListener = (query) => {
+      if (!query) return;
+      const listener = () => updateLowEffectsClass();
+      if (typeof query.addEventListener === 'function') {
+        query.addEventListener('change', listener);
+      } else if (typeof query.addListener === 'function') {
+        query.addListener(listener);
+      }
+    };
+
+    effectsConfig.setLowEffectsMode = (value) => {
+      if (typeof value === 'boolean') {
+        safeSetItem('vod-low-effects', value ? 'true' : 'false');
+      } else {
+        safeSetItem('vod-low-effects');
+      }
+      updateLowEffectsClass();
+    };
+
+    updateLowEffectsClass();
+    attachPreferenceListener(reduceMotionQuery);
+    attachPreferenceListener(reduceTransparencyQuery);
+  }
+
+  /**
+   * Delegate click handling within the videos grid
+   */
+  function handleVideoGridClick(event) {
+    if (!videosGrid) return;
+
+    const favoriteIndicator = event.target.closest('.favorite-indicator-grid');
+    if (favoriteIndicator && videosGrid.contains(favoriteIndicator)) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const videoId = favoriteIndicator.dataset.videoId;
+      if (!videoId || !window.VideoUtils || typeof window.VideoUtils.toggleFavorite !== 'function') {
+        return;
+      }
+
+      const isNowFavorited = window.VideoUtils.toggleFavorite(videoId);
+      favoriteIndicator.classList.toggle('favorited', isNowFavorited);
+
+      const videoIndex = allVideos.findIndex(v => v.id.toString() === videoId);
+      if (videoIndex > -1) {
+        allVideos[videoIndex].is_favorite = isNowFavorited ? 1 : 0;
+      }
+
+      showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
+      return;
+    }
+
+    const link = event.target.closest('.video-card-link');
+    if (!link || !videosGrid.contains(link)) {
+      return;
+    }
+
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
+      // Allow native browser behavior for modified clicks
+      return;
+    }
+
+    const card = link.closest('.video-card');
+    if (!card) {
+      return;
+    }
+
+    const videoId = card.dataset.id;
+    if (!videoId) {
+      return;
+    }
+
+    event.preventDefault();
+    openVideoOverlay(videoId, event);
+  }
+
+  /**
+   * Handle auxiliary clicks (e.g., middle mouse button) on the videos grid
+   */
+  function handleVideoGridAuxClick(event) {
+    if (event.button !== 1 || !videosGrid) {
+      return;
+    }
+
+    const link = event.target.closest('.video-card-link');
+    if (!link || !videosGrid.contains(link)) {
+      return;
+    }
+
+    event.preventDefault();
+    window.open(link.href, '_blank', 'noopener,noreferrer');
+  }
+
+  /**
+   * Prevent middle-click auto-scroll on card links
+   */
+  function handleVideoGridMouseDown(event) {
+    if (event.button !== 1 || !videosGrid) {
+      return;
+    }
+
+    const link = event.target.closest('.video-card-link');
+    if (link && videosGrid.contains(link)) {
+      event.preventDefault();
+    }
+  }
+
+
   /**
    * Load videos from the API with pagination
    */
@@ -449,53 +644,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>
       `;
       
-      // --- Add Click Listener for Favorite Indicator ---
-      // The favorite indicator is now a direct child of videoCard, not within the <a> tag.
-      // Its click listener still needs to stop propagation to prevent the <a> tag from navigating.
-      const favoriteIndicator = videoCard.querySelector('.favorite-indicator-grid');
-      if (favoriteIndicator) {
-          favoriteIndicator.addEventListener('click', (event) => {
-              event.stopPropagation(); // Prevent card link navigation
-              const videoId = event.target.dataset.videoId;
-              const isNowFavorited = VideoUtils.toggleFavorite(videoId);
-              event.target.classList.toggle('favorited', isNowFavorited);
-              // Optional: Update the allVideos cache if needed for filtering consistency
-              const videoIndex = allVideos.findIndex(v => v.id.toString() === videoId);
-              if (videoIndex > -1) {
-                  allVideos[videoIndex].is_favorite = isNowFavorited ? 1 : 0; 
-              }
-              showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
-          });
+      if (!document.body.classList.contains('low-effects')) {
+        videoCard.style.animationDelay = `${index * 0.05}s`;
+        videoCard.classList.add('fade-in');
+      } else {
+        videoCard.style.animationDelay = '';
+        videoCard.classList.remove('fade-in');
       }
-      // --- End Favorite Indicator Click Listener ---
-
-      // --- Add Click Listener for Video Card Link ---
-      const videoLink = videoCard.querySelector('.video-card-link');
-      if (videoLink) {
-          videoLink.addEventListener('click', (event) => {
-              // Check for middle click (button 1) or Ctrl+left click - open in new tab
-              if (event.button === 1 || (event.button === 0 && event.ctrlKey)) {
-                  event.preventDefault();
-                  window.open(videoLink.href, '_blank', 'noopener,noreferrer');
-              } else if (event.button === 0) {
-                  // Regular left click - open in overlay
-                  event.preventDefault();
-                  openVideoOverlay(video.id.toString(), event);
-              }
-          });
-          
-          // Also handle mousedown for middle click detection
-          videoLink.addEventListener('mousedown', (event) => {
-              if (event.button === 1) {
-                  event.preventDefault(); // Prevent middle-click scroll behavior
-              }
-          });
-      }
-      // --- End Video Card Link Click Listener ---
-
-      // Apply animation delay
-      videoCard.style.animationDelay = `${index * 0.05}s`;
-      videoCard.classList.add('fade-in');
 
       // Cache metadata using the preloader utility if available
       if (window.VideoPreloader && typeof window.VideoPreloader.cacheVideoMetadata === 'function') {
@@ -619,9 +774,13 @@ document.addEventListener('DOMContentLoaded', async () => {
        }
     }, 300); // 300ms debounce delay
 
+    const shouldAttachHoverPreload = !document.body.classList.contains('low-effects');
+
     videoCards.forEach(card => {
       const videoId = card.dataset.id;
-      card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
+      if (shouldAttachHoverPreload) {
+        card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
+      }
       observer.observe(card);
       card.classList.add('preload-observed'); // Mark card as observed
     });
@@ -800,8 +959,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     videosGrid.prepend(videoCard); // Add to the beginning of the grid
 
     // Re-apply animation delays to all cards to maintain order
+    const shouldAnimateCards = !document.body.classList.contains('low-effects');
     Array.from(videosGrid.children).forEach((card, index) => {
+      if (shouldAnimateCards) {
         card.style.animationDelay = `${index * 0.05}s`;
+      } else {
+        card.style.animationDelay = '';
+      }
     });
 
     // Setup preloading for the new card
@@ -854,6 +1018,11 @@ document.addEventListener('DOMContentLoaded', async () => {
    * Initialize GSAP-based smooth scrolling
    */
   function initializeGsapSmoothScroll() {
+    const effectsConfig = window.VideoUIEffects || {};
+    if (!effectsConfig.smoothScrollEnabled) {
+      return;
+    }
+
     if (typeof gsap === 'undefined' || typeof ScrollTrigger === 'undefined' || typeof ScrollToPlugin === 'undefined') {
       console.error('GSAP, ScrollTrigger, or ScrollToPlugin not loaded. Smooth scrolling disabled.');
       return;
@@ -918,7 +1087,108 @@ document.addEventListener('DOMContentLoaded', async () => {
   /**
    * Video Overlay Functions
    */
-  
+
+  // FPS monitoring for overlay performance
+  let overlayFPSMonitor = null;
+
+  /**
+   * Start FPS monitoring for overlay video performance
+   * @param {HTMLVideoElement} videoElement - The video element to monitor
+   */
+  function startOverlayFPSMonitoring(videoElement) {
+    if (!videoElement || !('requestVideoFrameCallback' in videoElement)) {
+      console.warn('[Performance] requestVideoFrameCallback not supported, FPS monitoring disabled');
+      return;
+    }
+
+    stopOverlayFPSMonitoring(); // Stop any existing monitoring
+
+    const monitor = {
+      frameCount: 0,
+      lastTime: performance.now(),
+      startTime: performance.now(),
+      sampleCount: 0,
+      totalFPS: 0,
+      minFPS: Infinity,
+      maxFPS: 0,
+      belowThreshold: 0,
+      element: videoElement,
+      callbackId: null,
+      isActive: true
+    };
+
+    const fpsCallback = (now, metadata) => {
+      if (!monitor.isActive) return;
+
+      monitor.frameCount++;
+      const elapsed = now - monitor.lastTime;
+
+      // Calculate FPS every 1 second
+      if (elapsed >= 1000) {
+        const fps = Math.round((monitor.frameCount * 1000) / elapsed);
+        monitor.frameCount = 0;
+        monitor.lastTime = now;
+        monitor.sampleCount++;
+        monitor.totalFPS += fps;
+        monitor.minFPS = Math.min(monitor.minFPS, fps);
+        monitor.maxFPS = Math.max(monitor.maxFPS, fps);
+
+        if (fps < 30) {
+          monitor.belowThreshold++;
+        }
+
+        // Log FPS periodically for debugging
+        if (monitor.sampleCount % 5 === 0) {
+          const avgFPS = Math.round(monitor.totalFPS / monitor.sampleCount);
+          console.log(`[Performance] Overlay FPS - Current: ${fps}, Avg: ${avgFPS}, Min: ${monitor.minFPS}, Max: ${monitor.maxFPS}, Below 30fps: ${monitor.belowThreshold}/${monitor.sampleCount} samples`);
+        }
+
+        // Auto-enable low effects if performance is consistently poor
+        if (monitor.sampleCount >= 3 && monitor.belowThreshold / monitor.sampleCount >= 0.6) {
+          const effectsConfig = window.VideoUIEffects || {};
+          if (!effectsConfig.lowEffectsEnabled) {
+            console.warn('[Performance] Poor overlay performance detected, auto-enabling low effects mode');
+            if (window.enableLowEffectsMode) {
+              window.enableLowEffectsMode();
+            }
+          }
+        }
+      }
+
+      // Continue monitoring
+      if (monitor.isActive) {
+        monitor.callbackId = videoElement.requestVideoFrameCallback(fpsCallback);
+      }
+    };
+
+    // Start monitoring
+    monitor.callbackId = videoElement.requestVideoFrameCallback(fpsCallback);
+    overlayFPSMonitor = monitor;
+
+    console.log('[Performance] Started overlay FPS monitoring');
+  }
+
+  /**
+   * Stop FPS monitoring for overlay
+   */
+  function stopOverlayFPSMonitoring() {
+    if (overlayFPSMonitor) {
+      overlayFPSMonitor.isActive = false;
+      if (overlayFPSMonitor.callbackId && overlayFPSMonitor.element) {
+        overlayFPSMonitor.element.cancelVideoFrameCallback(overlayFPSMonitor.callbackId);
+      }
+
+      // Log final stats
+      if (overlayFPSMonitor.sampleCount > 0) {
+        const avgFPS = Math.round(overlayFPSMonitor.totalFPS / overlayFPSMonitor.sampleCount);
+        const duration = Math.round((performance.now() - overlayFPSMonitor.startTime) / 1000);
+        console.log(`[Performance] Overlay FPS monitoring stopped - Duration: ${duration}s, Avg FPS: ${avgFPS}, Min: ${overlayFPSMonitor.minFPS}, Max: ${overlayFPSMonitor.maxFPS}`);
+      }
+
+      overlayFPSMonitor = null;
+    }
+  }
+
   /**
    * Open video overlay with specified video ID
    * @param {string} videoId - The ID of the video to open
@@ -948,7 +1218,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Update URL
       const newUrl = `/watch/${videoId}`;
       history.pushState({ videoOverlay: true, videoId }, '', newUrl);
-      
+
+      // Suspend preview system to free up resources
+      if (window.videoPreviewManager) {
+        window.videoPreviewManager.pause();
+      }
+
       // Load video metadata
       let video = null;
       try {
@@ -990,9 +1265,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Initialize video player
       const overlayVideo = document.getElementById('overlay-video-player');
       overlayVideo.src = `/api/videos/${videoId}/stream`;
-      
+
       // Initialize Plyr
       initializeOverlayPlayer(video);
+
+      // Start FPS monitoring for performance analysis
+      startOverlayFPSMonitoring(overlayVideo);
       
       // Update favorite button state
       updateOverlayFavoriteButton(videoId);
@@ -1002,8 +1280,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.querySelector('.video-overlay-close').focus();
       }, 100);
       
-      // Preload additional segments
-      preloadOverlaySegments(videoId);
+      // Preload additional segments (conditional based on performance)
+      preloadOverlaySegments(videoId, overlayVideo);
       
       // Remove loading overlay
       setTimeout(() => {
@@ -1024,12 +1302,20 @@ document.addEventListener('DOMContentLoaded', async () => {
    */
   function closeVideoOverlay() {
     const overlay = document.getElementById('video-overlay');
-    
+
+    // Stop FPS monitoring
+    stopOverlayFPSMonitoring();
+
     // Hide overlay
     overlay.classList.remove('visible');
     overlay.setAttribute('aria-hidden', 'true');
     document.body.classList.remove('overlay-open');
-    
+
+    // Resume preview system
+    if (window.videoPreviewManager) {
+      window.videoPreviewManager.resume();
+    }
+
     // Clean up Plyr player
     if (overlayPlyrPlayer) {
       try {
@@ -1240,12 +1526,48 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   
   /**
-   * Preload segments for overlay video
+   * Preload segments for overlay video (conditional based on performance)
    * @param {string} videoId - Video ID
+   * @param {HTMLVideoElement} videoElement - Video element to check buffering state
    */
-  async function preloadOverlaySegments(videoId) {
+  async function preloadOverlaySegments(videoId, videoElement = null) {
     try {
+      // Skip preloading if low-effects mode is enabled (indicates constrained system)
+      const effectsConfig = window.VideoUIEffects || {};
+      if (effectsConfig.lowEffectsEnabled) {
+        console.log('[Performance] Skipping segment preloading - low effects mode enabled');
+        return;
+      }
+
+      // Skip preloading if FPS is poor (system under stress)
+      if (overlayFPSMonitor && overlayFPSMonitor.sampleCount >= 2) {
+        const avgFPS = overlayFPSMonitor.totalFPS / overlayFPSMonitor.sampleCount;
+        if (avgFPS < 40) {
+          console.log(`[Performance] Skipping segment preloading - poor FPS (${Math.round(avgFPS)})`);
+          return;
+        }
+      }
+
+      // Check if video is actually buffering/needs preloading
+      if (videoElement) {
+        const buffered = videoElement.buffered;
+        const currentTime = videoElement.currentTime;
+        const duration = videoElement.duration;
+
+        // If we have good buffering ahead, skip preloading
+        if (buffered.length > 0) {
+          const bufferedEnd = buffered.end(buffered.length - 1);
+          const bufferedAhead = bufferedEnd - currentTime;
+
+          if (bufferedAhead > 30 || bufferedEnd >= duration * 0.8) {
+            console.log(`[Performance] Skipping segment preloading - sufficient buffer (${Math.round(bufferedAhead)}s ahead)`);
+            return;
+          }
+        }
+      }
+
       if (window.VideoPreloader) {
+        console.log('[Performance] Starting conditional segment preloading');
         for (let i = 1; i <= 3; i++) {
           try {
             await window.VideoPreloader.preloadSegment(videoId, i);

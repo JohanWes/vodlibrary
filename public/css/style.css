@@ -2,27 +2,27 @@
 :root {
   /* Modern Color Palette */
   --bg-color: #0a0a0f;
-  --bg-secondary: #161621;
+  --bg-secondary: #141420;
   --bg-tertiary: #1e1e2a;
   --bg-quaternary: #262636;
   --text-color: #ffffff;
   --text-secondary: #c4c4d1;
   --text-tertiary: #8b8ba3;
-  --accent-color: #6366f1;
-  --accent-hover: #5b5eef;
-  --accent-light: rgba(99, 102, 241, 0.1);
+  --accent-color: #0891b2;
+  --accent-hover: #0e7490;
+  --accent-light: rgba(8, 145, 178, 0.1);
   --border-color: #2a2a3c;
   --border-light: #34344a;
   --hover-color: #2a2a3c;
   --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.24);
   --card-shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.32);
-  --glass-bg: rgba(22, 22, 33, 0.8);
+  --glass-bg: rgba(20, 20, 32, 0.8);
   --glass-border: rgba(255, 255, 255, 0.1);
   
   /* Modern Gradients */
-  --gradient-primary: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  --gradient-secondary: linear-gradient(135deg, #1e1e2a 0%, #262636 100%);
-  --gradient-overlay: linear-gradient(135deg, rgba(99, 102, 241, 0.1) 0%, rgba(139, 92, 246, 0.1) 100%);
+  --gradient-primary: linear-gradient(135deg, #0891b2 0%, #0284c7 100%);
+  --gradient-secondary: linear-gradient(135deg, #141420 0%, #1e1e2a 100%);
+  --gradient-overlay: linear-gradient(135deg, rgba(8, 145, 178, 0.1) 0%, rgba(2, 132, 199, 0.1) 100%);
   
   /* Animation */
   --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
@@ -60,6 +60,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
   background: var(--bg-color);
@@ -72,6 +76,88 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+body.low-effects * {
+  transition-duration: var(--transition-fast);
+}
+
+body.low-effects header,
+body.low-effects footer,
+body.low-effects .search-container,
+body.low-effects .search-input,
+body.low-effects .videos-header,
+body.low-effects .video-overlay-container,
+body.low-effects .video-overlay,
+body.low-effects .video-overlay-backdrop,
+body.low-effects .scan-status,
+body.low-effects .share-popover {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+body.low-effects header {
+  background: var(--bg-secondary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+  border-bottom: 1px solid var(--border-light);
+}
+
+body.low-effects footer {
+  background: var(--bg-tertiary);
+  box-shadow: none;
+}
+
+body.low-effects .video-overlay-container {
+  background: var(--bg-secondary);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+}
+
+body.low-effects .video-overlay {
+  background: rgba(0, 0, 0, 0.85);
+}
+
+body.low-effects .video-overlay.visible ~ header,
+body.low-effects .video-overlay.visible ~ main,
+body.low-effects .video-overlay.visible ~ footer {
+  filter: none;
+}
+
+body.low-effects .video-card {
+  background: var(--bg-tertiary);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  transition: none;
+}
+
+body.low-effects .video-card::before {
+  display: none;
+}
+
+body.low-effects .video-card:hover {
+  transform: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  border-color: var(--border-light);
+}
+
+body.low-effects .thumbnail {
+  transition: none;
+}
+
+body.low-effects .video-card:hover .thumbnail {
+  transform: none;
+}
+
+body.low-effects .duration-badge {
+  background-color: rgba(0, 0, 0, 0.85);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+body.low-effects .fade-in {
+  animation: none !important;
+  opacity: 1 !important;
+  transform: none !important;
+}
+
 
 /* Import Google Font */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -302,13 +388,13 @@ header {
   margin-right: 14px;
   position: relative;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
   transition: all var(--transition-normal);
 }
 
 .logo-link:hover .logo-box {
   transform: rotate(10deg);
-  box-shadow: 0 4px 12px rgba(92, 108, 255, 0.5);
+  box-shadow: 0 4px 12px rgba(8, 145, 178, 0.5);
 }
 
 .logo-box::after {
@@ -360,7 +446,7 @@ h1 {
   font-size: 14px;
   font-weight: var(--font-weight-semibold);
   transition: all var(--transition-normal);
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 16px rgba(8, 145, 178, 0.3);
   position: relative;
   overflow: hidden;
 }
@@ -386,9 +472,9 @@ h1 {
 }
 
 .refresh-btn:hover {
-  background: linear-gradient(135deg, #5b5eef 0%, #7c3aed 100%);
+  background: linear-gradient(135deg, #0e7490 0%, #0369a1 100%);
   transform: translateY(-3px);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.4);
+  box-shadow: 0 8px 24px rgba(8, 145, 178, 0.4);
 }
 
 .refresh-btn:hover svg {
@@ -397,7 +483,7 @@ h1 {
 
 .refresh-btn:active {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+  box-shadow: 0 4px 12px rgba(8, 145, 178, 0.3);
 }
 
 /* Videos Grid */
@@ -422,7 +508,7 @@ h1 {
   left: 0;
   width: 40px;
   height: 3px;
-  background: linear-gradient(to right, var(--accent-color), #7a5cff);
+  background: linear-gradient(to right, var(--accent-color), #0284c7);
   border-radius: 3px;
 }
 
@@ -576,6 +662,9 @@ select option:hover, select option:focus {
   box-shadow: var(--card-shadow);
   border: 1px solid var(--border-light);
   position: relative;
+  content-visibility: auto;
+  contain: layout paint style;
+  contain-intrinsic-size: 320px 240px;
 }
 
 .video-card::before {
@@ -798,7 +887,6 @@ select option:hover, select option:focus {
 
 .video-card:hover .video-title {
   color: var(--accent-color);
-  transform: translateX(4px);
 }
 
 .video-date {
@@ -841,7 +929,7 @@ select option:hover, select option:focus {
   border-radius: 50%;
   margin: 24px auto 0;
   animation: modernSpin 1.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-  box-shadow: 0 0 20px rgba(99, 102, 241, 0.2);
+  box-shadow: 0 0 20px rgba(8, 145, 178, 0.2);
 }
 
 @keyframes modernSpin {
@@ -852,8 +940,8 @@ select option:hover, select option:focus {
   }
   50% { 
     transform: rotate(180deg); 
-    border-top-color: #8b5cf6;
-    border-right-color: #8b5cf6;
+    border-top-color: #0284c7;
+    border-right-color: #0284c7;
   }
   100% { 
     transform: rotate(360deg); 
@@ -1368,10 +1456,10 @@ footer p {
 .death-marker {
   position: absolute;
   top: 20%; /* Vertically center */
-  height: 60%; /* Shorter height */
-  width: 1px; /* Thinner */
+  height: 70%; /* Shorter height */
+  width: 3px; /* Thinner */
   background-color: rgba(255, 0, 0, 0.8); /* Red color, slightly less transparent */
-  z-index: 3; /* Ensure it's above progress bar but potentially below scrubber handle */
+  z-index: 0; /* Ensure it's above progress bar but potentially below scrubber handle */
   pointer-events: none; /* Prevent interference with seeking */
   transform: translateX(-50%); /* Center the marker on its percentage */
 }
@@ -1543,13 +1631,31 @@ a:focus {
   opacity: 0;
   transition: opacity var(--transition-normal);
   overflow: auto;
-  will-change: opacity;
+  will-change: auto;
   transform: translateZ(0);
+  contain: layout;
 }
 
 .video-overlay.visible {
   display: flex;
   opacity: 1;
+}
+
+/* Optimize will-change only during transitions */
+.video-overlay:not(.visible) {
+  will-change: opacity;
+}
+
+.video-overlay.visible {
+  will-change: auto;
+}
+
+.video-overlay:not(.visible) .video-overlay-container {
+  will-change: opacity, transform;
+}
+
+.video-overlay.visible .video-overlay-container {
+  will-change: auto;
 }
 
 .video-overlay-backdrop {
@@ -1563,7 +1669,7 @@ a:focus {
 }
 
 .video-overlay-container {
-  background: rgba(22, 22, 33, 0.95);
+  background: rgba(20, 20, 32, 0.95);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--card-shadow-hover);
@@ -1573,14 +1679,29 @@ a:focus {
   max-width: 1450px;
   position: relative;
   z-index: 2;
-  transform: scale(0.9);
-  transition: transform var(--transition-normal);
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity var(--transition-normal), transform var(--transition-normal);
   overflow: hidden;
-  will-change: transform;
+  will-change: auto;
+  contain: layout style paint;
 }
 
 .video-overlay.visible .video-overlay-container {
-  transform: scale(1);
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  .video-overlay-container {
+    transform: none;
+    transition: opacity var(--transition-fast);
+  }
+
+  .video-overlay.visible .video-overlay-container {
+    transform: none;
+  }
 }
 
 .video-overlay-close {
@@ -1624,8 +1745,8 @@ a:focus {
   border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   overflow: hidden;
   position: relative;
-  transform: translateZ(0);
   contain: layout style paint;
+  transform: translateZ(0);
 }
 
 #overlay-video-player {
@@ -1846,11 +1967,24 @@ a:focus {
 
 .video-overlay-player-container .plyr__controls {
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
-  will-change: opacity, transform;
+  will-change: auto;
   transform: translateZ(0);
+  contain: layout style;
+}
+
+/* Optimize Plyr controls will-change only during interactions */
+.video-overlay-player-container .plyr__controls:hover,
+.video-overlay-player-container .plyr--playing .plyr__controls,
+.video-overlay-player-container .plyr--loading .plyr__controls {
+  will-change: opacity, transform;
 }
 
 .video-overlay-player-container .plyr__control {
+  will-change: auto;
+}
+
+.video-overlay-player-container .plyr__control:hover,
+.video-overlay-player-container .plyr__control:focus {
   will-change: opacity, transform;
 }
 
@@ -1878,11 +2012,11 @@ body.overlay-open {
 /* Death markers for overlay player */
 .video-overlay-player-container .death-marker {
   position: absolute;
-  top: 0;
+  top: 20%;
   bottom: 0;
-  width: 2px;
+  width: 3px;
   background: #ff4444;
-  z-index: 5;
+  z-index: 0;
   pointer-events: none;
   opacity: 0.8;
 }
@@ -1945,5 +2079,11 @@ body.overlay-open {
   .video-overlay-actions .favorite-btn,
   .overlay-share-container .share-btn {
     border: 1px solid #ffffff;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
   }
 }
