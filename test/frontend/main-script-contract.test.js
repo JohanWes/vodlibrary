@@ -28,4 +28,12 @@ describe('Main script contract', () => {
     expect(source.includes('limited-preload-styles')).toBe(false);
     expect(source.includes('.search-container.focused .search-input')).toBe(false);
   });
+
+  test('wires pointer-reactive card tilt with pointer capability guards', () => {
+    const source = loadMainScript();
+
+    expect(source.includes("videosGrid.addEventListener('pointermove', handleVideoGridPointerMove);")).toBe(true);
+    expect(source.includes("window.matchMedia('(pointer: coarse)').matches")).toBe(true);
+    expect(source.includes("window.addEventListener('scroll', clearActiveCardTilt, { passive: true });")).toBe(true);
+  });
 });

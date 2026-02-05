@@ -51,6 +51,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     videosGrid.addEventListener('click', handleVideoGridClick);
     videosGrid.addEventListener('auxclick', handleVideoGridAuxClick);
     videosGrid.addEventListener('mousedown', handleVideoGridMouseDown);
+    videosGrid.addEventListener('pointermove', handleVideoGridPointerMove);
+    videosGrid.addEventListener('pointerleave', handleVideoGridPointerLeave);
+    videosGrid.addEventListener('pointerdown', handleVideoGridPointerDown);
+    videosGrid.addEventListener('pointerup', handleVideoGridPointerUpOrCancel);
+    videosGrid.addEventListener('pointercancel', handleVideoGridPointerUpOrCancel);
+    window.addEventListener('scroll', clearActiveCardTilt, { passive: true });
+    window.addEventListener('blur', clearActiveCardTilt);
+    window.addEventListener('pointerup', clearTouchActiveCards);
+    window.addEventListener('pointercancel', clearTouchActiveCards);
   }
 
   // State Variables
@@ -74,6 +83,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   let preloadObserver = null;
   let overlayOpenTimer = null;
   let overlayCloseTimer = null;
+  const parsedCardTiltMax = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--card-hover-rotate-max'));
+  const cardTiltMaxDegrees = Number.isFinite(parsedCardTiltMax) ? parsedCardTiltMax : 5;
+  let activeTiltCard = null;
+  let pendingTiltCard = null;
+  let pendingTiltX = 0;
+  let pendingTiltY = 0;
+  let tiltAnimationFrameId = null;
   
   // Video overlay variables
   let overlayPlyrPlayer = null; // Plyr instance for overlay
@@ -102,6 +118,141 @@ document.addEventListener('DOMContentLoaded', async () => {
     return new Promise((resolve) => {
       window.requestAnimationFrame(() => resolve());
     });
+  }
+
+  function isCoarsePointerDevice() {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  }
+
+  function canUseInteractiveCardTilt() {
+    if (document.body.classList.contains('low-effects')) {
+      return false;
+    }
+    return !isCoarsePointerDevice();
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function resetCardTilt(card) {
+    if (!card) return;
+    card.style.setProperty('--card-rotate-x', '0deg');
+    card.style.setProperty('--card-rotate-y', '0deg');
+    card.classList.remove('is-tilting');
+  }
+
+  function clearActiveCardTilt() {
+    if (tiltAnimationFrameId) {
+      window.cancelAnimationFrame(tiltAnimationFrameId);
+      tiltAnimationFrameId = null;
+    }
+    pendingTiltCard = null;
+    if (activeTiltCard) {
+      resetCardTilt(activeTiltCard);
+      activeTiltCard = null;
+    }
+  }
+
+  function updateCardTilt(card, clientX, clientY) {
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      resetCardTilt(card);
+      return;
+    }
+
+    const normalizedX = clamp(((clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
+    const normalizedY = clamp(((clientY - rect.top) / rect.height) * 2 - 1, -1, 1);
+    const rotateX = (-normalizedY * cardTiltMaxDegrees).toFixed(2);
+    const rotateY = (normalizedX * cardTiltMaxDegrees).toFixed(2);
+
+    card.style.setProperty('--card-rotate-x', `${rotateX}deg`);
+    card.style.setProperty('--card-rotate-y', `${rotateY}deg`);
+    card.classList.add('is-tilting');
+  }
+
+  function queueCardTilt(card, clientX, clientY) {
+    pendingTiltCard = card;
+    pendingTiltX = clientX;
+    pendingTiltY = clientY;
+
+    if (tiltAnimationFrameId) {
+      return;
+    }
+
+    tiltAnimationFrameId = window.requestAnimationFrame(() => {
+      tiltAnimationFrameId = null;
+      if (!pendingTiltCard) {
+        return;
+      }
+
+      if (activeTiltCard && activeTiltCard !== pendingTiltCard) {
+        resetCardTilt(activeTiltCard);
+      }
+
+      activeTiltCard = pendingTiltCard;
+      updateCardTilt(activeTiltCard, pendingTiltX, pendingTiltY);
+    });
+  }
+
+  function clearTouchActiveCards() {
+    if (!videosGrid) return;
+    videosGrid.querySelectorAll('.video-card.is-touch-active').forEach((card) => {
+      card.classList.remove('is-touch-active');
+    });
+  }
+
+  function handleVideoGridPointerMove(event) {
+    if (!videosGrid) return;
+    if (!canUseInteractiveCardTilt()) {
+      clearActiveCardTilt();
+      return;
+    }
+
+    const card = event.target.closest('.video-card');
+    if (!card || !videosGrid.contains(card)) {
+      clearActiveCardTilt();
+      return;
+    }
+
+    queueCardTilt(card, event.clientX, event.clientY);
+  }
+
+  function handleVideoGridPointerLeave(event) {
+    if (!videosGrid) return;
+    const nextTarget = event.relatedTarget;
+    if (nextTarget && videosGrid.contains(nextTarget)) {
+      return;
+    }
+    clearActiveCardTilt();
+  }
+
+  function handleVideoGridPointerDown(event) {
+    if (!videosGrid || !isCoarsePointerDevice()) {
+      return;
+    }
+
+    const card = event.target.closest('.video-card');
+    if (!card || !videosGrid.contains(card)) {
+      return;
+    }
+
+    clearTouchActiveCards();
+    card.classList.add('is-touch-active');
+  }
+
+  function handleVideoGridPointerUpOrCancel(event) {
+    if (!videosGrid || !isCoarsePointerDevice()) {
+      return;
+    }
+
+    const card = event.target.closest('.video-card');
+    if (card && videosGrid.contains(card)) {
+      card.classList.remove('is-touch-active');
+    } else {
+      clearTouchActiveCards();
+    }
   }
 
   /**
@@ -178,8 +329,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           reduceMotion ||
           reduceTransparency ||
           effectsConfig.forceLowEffects ||
-          lowMemoryDevice ||
-          constrainedConnection
+          (lowMemoryDevice && constrainedConnection)
         );
       }
 
@@ -679,6 +829,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       if (animate && !document.body.classList.contains('low-effects')) {
         videoCard.classList.add('card-enter');
+        videoCard.addEventListener('animationend', () => {
+          videoCard.classList.remove('card-enter');
+        }, { once: true });
       }
 
       // Cache metadata using the preloader utility if available

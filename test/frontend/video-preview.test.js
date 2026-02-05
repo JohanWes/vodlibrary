@@ -214,6 +214,58 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
 
       expect(showFallbackSpy).toHaveBeenCalledWith(mockVideoCard, '1');
     });
+
+    test('should ignore empty-src media errors during preview teardown', async () => {
+      jest.useFakeTimers();
+      try {
+        global.fetch.mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            hasPreview: true,
+            status: 'completed',
+            clips: [{ timestamp: 10, path: '/previews/test_10s.mp4' }]
+          })
+        });
+
+        const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        const showFallbackSpy = jest.spyOn(manager, 'showFallbackPreview');
+
+        await manager.showPreview(mockVideoCard, '1');
+
+        const activeVideo = manager.activeVideos.get('1');
+        expect(activeVideo).toBeDefined();
+
+        manager.hidePreview(mockVideoCard, '1');
+
+        Object.defineProperty(activeVideo.element, 'error', {
+          configurable: true,
+          value: {
+            code: 4,
+            message: 'MEDIA_ELEMENT_ERROR: Empty src attribute',
+            MEDIA_ERR_ABORTED: 1,
+            MEDIA_ERR_NETWORK: 2,
+            MEDIA_ERR_DECODE: 3,
+            MEDIA_ERR_SRC_NOT_SUPPORTED: 4
+          }
+        });
+
+        activeVideo.element.dispatchEvent(new Event('error'));
+        jest.advanceTimersByTime(350);
+
+        expect(showFallbackSpy).not.toHaveBeenCalled();
+        expect(
+          consoleErrorSpy.mock.calls.some(
+            (args) =>
+              typeof args[0] === 'string'
+              && args[0].includes('[VideoPreview] Preview playback failed for video 1')
+          )
+        ).toBe(false);
+
+        consoleErrorSpy.mockRestore();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 
   describe('Memory Management Tests', () => {

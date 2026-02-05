@@ -12,7 +12,7 @@ class VideoPreviewManager {
     this.previewCache = new Map(); // Cache preview metadata
     this.loadingPreviews = new Set();
     this.hoverTimeouts = new Map(); // Track hover timeouts
-    this.HOVER_DELAY = 500; // 500ms delay before showing preview
+    this.HOVER_DELAY = 300; // 300ms delay before showing preview
     
     this.isSuspended = false;
 
@@ -97,7 +97,7 @@ class VideoPreviewManager {
     video.playsInline = true; // Important for mobile
     video.autoplay = false;
     video.controls = false;
-    video.src = ''; // Ensure src is reset
+    video.removeAttribute('src');
     video.style.cssText = `
       position: absolute;
       top: 0;
@@ -121,7 +121,8 @@ class VideoPreviewManager {
    */
   releaseVideoElement(video) {
     video.pause();
-    video.src = '';
+    video.removeAttribute('src');
+    video.load(); // Ensure any in-flight load is cancelled
     video.currentTime = 0;
     video.style.opacity = '0';
     
@@ -134,6 +135,26 @@ class VideoPreviewManager {
     if (this.videoPool.length < this.maxPoolSize) {
       this.videoPool.push(newVideo);
     }
+  }
+
+  /**
+   * Determine whether a video error should be ignored during expected teardown
+   * @param {string} videoId
+   * @param {HTMLVideoElement} video
+   * @param {Event} event
+   * @returns {boolean}
+   */
+  isExpectedTeardownError(videoId, video, event) {
+    const activeVideo = this.activeVideos.get(videoId);
+    if (!activeVideo || activeVideo.element !== video || activeVideo.isDisposing) {
+      return true;
+    }
+
+    const mediaError = event && event.target && event.target.error ? event.target.error : null;
+    const srcAttr = video.getAttribute('src');
+    const hasNoSrc = !srcAttr;
+
+    return Boolean(mediaError && mediaError.code === 4 && hasNoSrc);
   }
 
   /**
@@ -249,6 +270,11 @@ class VideoPreviewManager {
         
         // Add enhanced error handling
         const errorHandler = (event) => {
+          if (this.isExpectedTeardownError(videoId, video, event)) {
+            this.debugLog(`[VideoPreview] Ignoring expected preview teardown error for video ${videoId}`);
+            return;
+          }
+
           console.error(`[VideoPreview] Preview playback failed for video ${videoId}`);
           console.error(`[VideoPreview] Video element details:`, {
             src: video.src,
@@ -290,6 +316,14 @@ class VideoPreviewManager {
           });
         };
 
+        this.activeVideos.set(videoId, {
+          element: video,
+          container: thumbnailContainer,
+          isDisposing: false,
+          errorHandler,
+          loadHandler
+        });
+
         video.addEventListener('loadeddata', loadHandler, { once: true });
         video.addEventListener('error', errorHandler, { once: true });
         
@@ -312,13 +346,6 @@ class VideoPreviewManager {
           this.debugLog(`[VideoPreview] Video currentSrc for ${videoId}: ${video.currentSrc}`);
         }, 10);
 
-        this.activeVideos.set(videoId, { 
-          element: video, 
-          container: thumbnailContainer,
-          errorHandler,
-          loadHandler
-        });
-        
         this.performanceMetrics.totalPreviews++;
         this.performanceMetrics.successfulPreviews++;
         this.debugLog(`[VideoPreview] Preview setup complete for video ${videoId}`);
@@ -342,6 +369,14 @@ class VideoPreviewManager {
   hidePreview(cardElement, videoId) {
     const activeVideo = this.activeVideos.get(videoId);
     if (activeVideo) {
+      activeVideo.isDisposing = true;
+      if (typeof activeVideo.loadHandler === 'function') {
+        activeVideo.element.removeEventListener('loadeddata', activeVideo.loadHandler);
+      }
+      if (typeof activeVideo.errorHandler === 'function') {
+        activeVideo.element.removeEventListener('error', activeVideo.errorHandler);
+      }
+
       activeVideo.element.style.opacity = '0';
       
       setTimeout(() => {

@@ -30,6 +30,16 @@ describe('Frontend stylesheet contract', () => {
     expect(css.includes('.search-container.focused .search-input')).toBe(true);
   });
 
+  test('includes interactive hover tilt hooks for catalogue cards', () => {
+    const css = loadStyleSheet();
+
+    expect(css.includes('--card-hover-rotate-max')).toBe(true);
+    expect(css.includes('--card-tilt-perspective')).toBe(true);
+    expect(css.includes('.video-card.is-tilting')).toBe(true);
+    expect(css.includes('perspective(var(--card-tilt-perspective))')).toBe(true);
+    expect(css.includes('.video-card:focus-within')).toBe(true);
+  });
+
   test('does not rely on css @import font loading', () => {
     const css = loadStyleSheet();
     expect(css.includes('@import url(')).toBe(false);

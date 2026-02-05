@@ -22,6 +22,11 @@
   --elevation-1: 0 10px 26px rgba(2, 4, 9, 0.34);
   --elevation-2: 0 16px 38px rgba(2, 4, 9, 0.46);
   --elevation-3: 0 24px 58px rgba(2, 4, 9, 0.54);
+  --card-hover-scale: 1.038;
+  --card-hover-lift: -10px;
+  --card-hover-rotate-max: 5deg;
+  --card-tilt-perspective: 1100px;
+  --card-glow: 0 0 0 1px rgba(212, 160, 90, 0.22), 0 24px 56px rgba(2, 4, 9, 0.56);
 
   /* Legacy aliases */
   --bg-color: var(--color-bg-950);
@@ -162,17 +167,39 @@ body.low-effects .video-overlay.visible ~ footer {
 body.low-effects .video-card {
   background: var(--bg-tertiary);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  transition: none;
+  transition: box-shadow var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  filter: none;
+  --card-rotate-x: 0deg;
+  --card-rotate-y: 0deg;
+  --card-lift: 0px;
+  --card-scale: 1;
 }
 
 body.low-effects .video-card::before {
+  opacity: 0;
+}
+
+body.low-effects .video-card::after {
   display: none;
 }
 
 body.low-effects .video-card:hover {
-  transform: none;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  border-color: var(--border-light);
+  --card-lift: -4px;
+  --card-scale: 1.02;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+  border-color: var(--accent-color);
+}
+
+body.low-effects .video-card:focus-within {
+  --card-lift: -4px;
+  --card-scale: 1.02;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
+  border-color: var(--accent-color);
+}
+
+body.low-effects .video-card:hover::before,
+body.low-effects .video-card:focus-within::before {
+  opacity: 0.62;
 }
 
 body.low-effects .thumbnail {
@@ -716,14 +743,32 @@ select option:hover, select option:focus {
   background: var(--gradient-secondary);
   border-radius: var(--radius-lg);
   overflow: hidden;
-  transition: all var(--transition-normal);
+  transition:
+    transform var(--transition-normal),
+    box-shadow var(--transition-normal),
+    border-color var(--transition-fast),
+    filter var(--transition-normal);
   cursor: pointer;
   box-shadow: var(--card-shadow);
   border: 1px solid var(--border-light);
   position: relative;
+  z-index: 0;
+  transform-origin: center center;
+  transform-style: preserve-3d;
+  will-change: transform, box-shadow;
   content-visibility: auto;
-  contain: layout paint style;
+  contain: layout style;
   contain-intrinsic-size: 320px 240px;
+  --card-rotate-x: 0deg;
+  --card-rotate-y: 0deg;
+  --card-lift: 0px;
+  --card-scale: 1;
+  transform:
+    perspective(var(--card-tilt-perspective))
+    rotateX(var(--card-rotate-x))
+    rotateY(var(--card-rotate-y))
+    translateY(var(--card-lift))
+    scale(var(--card-scale));
 }
 
 .video-card::before {
@@ -734,6 +779,20 @@ select option:hover, select option:focus {
   right: 0;
   bottom: 0;
   background: var(--gradient-overlay);
+  opacity: 0;
+  transition: opacity var(--transition-normal);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.video-card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0) 100%);
   opacity: 0;
   transition: opacity var(--transition-normal);
   pointer-events: none;
@@ -763,14 +822,31 @@ select option:hover, select option:focus {
   outline: none;
 }
 
-.video-card:hover {
-  transform: translateY(-6px) scale(1.01);
-  box-shadow: var(--card-shadow-hover);
+.video-card:hover,
+.video-card:focus-within,
+.video-card.is-touch-active {
+  --card-lift: var(--card-hover-lift);
+  --card-scale: var(--card-hover-scale);
+  box-shadow: var(--card-glow);
   border-color: var(--accent-color);
+  filter: saturate(1.03);
+  z-index: 4;
 }
 
-.video-card:hover::before {
+.video-card:hover::before,
+.video-card:focus-within::before,
+.video-card.is-touch-active::before {
   opacity: 1;
+}
+
+.video-card:hover::after,
+.video-card:focus-within::after,
+.video-card.is-touch-active::after {
+  opacity: 0.75;
+}
+
+.video-card.is-tilting {
+  transition-duration: 0.16s;
 }
 
 .thumbnail-container {
@@ -791,8 +867,10 @@ select option:hover, select option:focus {
   transition: transform var(--transition-slow);
 }
 
-.video-card:hover .thumbnail {
-  transform: scale(1.03);
+.video-card:hover .thumbnail,
+.video-card:focus-within .thumbnail,
+.video-card.is-touch-active .thumbnail {
+  transform: scale(1.012);
 }
 
 .duration-badge,
@@ -850,7 +928,9 @@ select option:hover, select option:focus {
   height: 16px;
 }
 
-.video-card:hover .favorite-indicator {
+.video-card:hover .favorite-indicator,
+.video-card:focus-within .favorite-indicator,
+.video-card.is-touch-active .favorite-indicator {
   transform: scale(1.06);
 }
 
@@ -873,7 +953,9 @@ select option:hover, select option:focus {
   transition: all var(--transition-normal);
 }
 
-.video-card:hover .favorite-indicator-grid {
+.video-card:hover .favorite-indicator-grid,
+.video-card:focus-within .favorite-indicator-grid,
+.video-card.is-touch-active .favorite-indicator-grid {
   transform: scale(1.06);
 }
 
@@ -910,7 +992,9 @@ select option:hover, select option:focus {
   transition: transform var(--transition-normal);
 }
 
-.video-card:hover .outcome-indicator {
+.video-card:hover .outcome-indicator,
+.video-card:focus-within .outcome-indicator,
+.video-card.is-touch-active .outcome-indicator {
   transform: scale(1.06);
 }
 
@@ -944,7 +1028,9 @@ select option:hover, select option:focus {
   line-height: 1.3;
 }
 
-.video-card:hover .video-title {
+.video-card:hover .video-title,
+.video-card:focus-within .video-title,
+.video-card.is-touch-active .video-title {
   color: #e3b778;
 }
 
@@ -1679,8 +1765,23 @@ body.login-page {
   transition: opacity 0.3s ease;
 }
 
-.video-card:hover .preview-quality-indicator {
+.video-card:hover .preview-quality-indicator,
+.video-card:focus-within .preview-quality-indicator,
+.video-card.is-touch-active .preview-quality-indicator {
   opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .video-card.is-touch-active {
+    --card-lift: -2px;
+    --card-scale: 1.01;
+    box-shadow: var(--card-shadow-hover);
+    filter: none;
+  }
+
+  .video-card.is-touch-active::after {
+    opacity: 0.45;
+  }
 }
 
 /* Responsive preview styles */
@@ -1691,7 +1792,8 @@ body.login-page {
   }
   
   /* Keep enhanced thumbnail fallback on mobile */
-  .video-card:active .thumbnail {
+  .video-card:active .thumbnail,
+  .video-card.is-touch-active .thumbnail {
     transform: scale(1.02);
     filter: brightness(1.05);
   }
@@ -1757,7 +1859,7 @@ a:focus {
 
 .video-card:focus-within {
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px var(--accent-light);
+  box-shadow: var(--card-glow), 0 0 0 3px var(--accent-light);
 }
 
 /* High contrast mode support */
