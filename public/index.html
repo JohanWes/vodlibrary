@@ -6,9 +6,11 @@
   <meta name="description" content="A simple VOD sharing system">
   <title>Loading...</title>
   <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
   <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
-  <link rel="icon" href="/favicon.ico" type="image/x-icon">
 </head>
 <body>
   <header>
@@ -37,7 +39,7 @@
       </div>
     </div>
     <div class="header-actions">
-      <div id="scan-status" class="scan-status"></div> <!-- Added scan status display -->
+      <div id="scan-status" class="scan-status" aria-live="polite"></div> <!-- Added scan status display -->
       <button id="refresh-btn" class="refresh-btn">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
           <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
