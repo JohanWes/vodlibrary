@@ -16,6 +16,13 @@ describe('Main script contract', () => {
     expect(source.includes("window.addEventListener('scroll', handleInfiniteScroll, { passive: true });")).toBe(true);
   });
 
+  test('initializes sentinel-based infinite loading when available', () => {
+    const source = loadMainScript();
+    expect(source.includes("const videosLoadSentinel = document.getElementById('videos-load-sentinel');")).toBe(true);
+    expect(source.includes("'IntersectionObserver' in window")).toBe(true);
+    expect(source.includes('initializeInfiniteScroll();')).toBe(true);
+  });
+
   test('does not inject search focus or preload info styles via runtime <style> tags', () => {
     const source = loadMainScript();
     expect(source.includes('limited-preload-styles')).toBe(false);

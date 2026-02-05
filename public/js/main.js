@@ -12,6 +12,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let videoPreviewManager;
   try {
     videoPreviewManager = new window.VideoPreviewManager();
+    window.videoPreviewManager = videoPreviewManager;
     console.log('Video preview manager initialized successfully');
   } catch (error) {
     console.warn('Failed to initialize video preview manager:', error);
@@ -39,6 +40,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const searchButton = document.getElementById('search-button');
   const advancedSearchToggle = document.getElementById('advanced-search-toggle');
   const favoritesToggle = document.getElementById('favorites-toggle');
+  const videosLoadSentinel = document.getElementById('videos-load-sentinel');
   const scanStatusElement = document.getElementById('scan-status'); // Get scan status element
   const loadingIndicator = document.createElement('div'); // Create loading indicator dynamically
   loadingIndicator.className = 'loading';
@@ -67,13 +69,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   let scanPollingInterval = null; // Interval ID for scan status polling
   let sseEventSource = null; // Variable to hold the EventSource instance
   let hasScanRunThisSession = false; // Flag to track if scan initiated in this session
-  let currentScrollTween = null; // To manage GSAP scroll animation
+  let pendingPage = null; // Track in-flight pagination requests
+  let infiniteScrollObserver = null;
+  let preloadObserver = null;
+  let overlayOpenTimer = null;
+  let overlayCloseTimer = null;
   
   // Video overlay variables
   let overlayPlyrPlayer = null; // Plyr instance for overlay
   let overlayCurrentVideoId = null; // Current video ID in overlay
   let overlayVideoMetadata = null; // Current video metadata
   let overlayBaseShareUrl = null; // Base share URL for current video
+  const OVERLAY_OPEN_TRANSITION_MS = 240;
+  const OVERLAY_CLOSE_TRANSITION_MS = 180;
 
   /**
    * Debounce function
@@ -88,6 +96,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       clearTimeout(timeout);
       timeout = setTimeout(later, wait);
     };
+  }
+
+  function nextFrame() {
+    return new Promise((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
   }
 
   /**
@@ -145,17 +159,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const updateLowEffectsClass = () => {
       const storedPreference = safeGetItem('vod-low-effects');
-      let shouldEnable = true; // Default to enabled for better performance
+      let shouldEnable = false;
 
       if (storedPreference === 'true') {
         shouldEnable = true;
       } else if (storedPreference === 'false') {
         shouldEnable = false;
       } else {
-        // Enable by default, but also check system preferences
+        // Auto-enable when system preferences or device/network constraints suggest lower effects.
         const reduceMotion = reduceMotionQuery && reduceMotionQuery.matches;
         const reduceTransparency = reduceTransparencyQuery && reduceTransparencyQuery.matches;
-        shouldEnable = true || Boolean(reduceMotion || reduceTransparency || effectsConfig.forceLowEffects);
+        const hasNavigator = typeof navigator !== 'undefined';
+        const lowMemoryDevice = hasNavigator && typeof navigator.deviceMemory === 'number' && navigator.deviceMemory <= 4;
+        const constrainedConnection = hasNavigator &&
+          navigator.connection &&
+          (navigator.connection.saveData || ['slow-2g', '2g'].includes(navigator.connection.effectiveType));
+        shouldEnable = Boolean(
+          reduceMotion ||
+          reduceTransparency ||
+          effectsConfig.forceLowEffects ||
+          lowMemoryDevice ||
+          constrainedConnection
+        );
       }
 
       document.body.classList.toggle('low-effects', shouldEnable);
@@ -291,10 +316,12 @@ document.addEventListener('DOMContentLoaded', async () => {
    */
   async function loadVideos(page = 1, append = false) {
     if (isLoading) return;
+    if (append && pendingPage === page) return;
     
     abortPreviousFetch(); // Abort previous request if any
     currentAbortController = new AbortController();
     const signal = currentAbortController.signal;
+    pendingPage = page;
 
     isLoading = true;
     loadingIndicator.style.display = 'block';
@@ -369,7 +396,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (allVideos.length === 0 && !append) {
          videosGrid.innerHTML = '<div class="loading">No videos found. Add videos to your library folder.</div>';
       } else {
-         renderVideos(newVideos, append); // Render only the newly fetched videos if appending
+         await renderVideos(newVideos, append); // Render only the newly fetched videos if appending
       }
 
     } catch (error) {
@@ -381,8 +408,10 @@ document.addEventListener('DOMContentLoaded', async () => {
        }
     } finally {
       isLoading = false;
+      pendingPage = null;
       loadingIndicator.style.display = 'none';
       currentAbortController = null; // Clear the controller
+      updateInfiniteScrollObserverState();
     }
   }
 
@@ -589,20 +618,24 @@ document.addEventListener('DOMContentLoaded', async () => {
   /**
    * Creates a video card DOM element.
    * @param {object} video - The video object.
-   * @param {number} index - The index for animation delay calculation.
+   * @param {object} options - Rendering options.
    * @returns {HTMLElement} The video card element.
    */
-  function createVideoCardElement(video, index = 0) {
+  function createVideoCardElement(video, options = {}) {
+      const {
+        animate = true,
+        highPriorityThumbnail = false
+      } = options;
       const videoCard = document.createElement('div');
       videoCard.className = 'video-card';
       videoCard.dataset.id = video.id;
 
-      const addedDate = new Date(video.added_date);
-      const formattedDate = addedDate.toLocaleDateString();
-
       const isFavorited = VideoUtils.isFavorite(video.id.toString()); // Use VideoUtils explicitly
       // Ensure duration is formatted, using utility if needed
       const durationFormatted = video.duration_formatted || (window.VideoUtils && typeof window.VideoUtils.formatDuration === 'function' ? window.VideoUtils.formatDuration(video.duration) : `${Math.floor(video.duration / 60)}:${(video.duration % 60).toString().padStart(2, '0')}`);
+      const thumbnailSrc = video.thumbnail_path || getPlaceholderThumbnail();
+      const imageLoading = highPriorityThumbnail ? 'eager' : 'lazy';
+      const imageFetchPriority = highPriorityThumbnail ? 'high' : 'auto';
 
       // --- Outcome Indicator Logic ---
       let outcomeStatus = 'neutral';
@@ -633,9 +666,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       videoCard.innerHTML = `
         <a href="/watch/${video.id}" rel="noopener noreferrer" class="video-card-link">
             <div class="thumbnail-container">
-              <img class="thumbnail" src="${video.thumbnail_path || getPlaceholderThumbnail()}" alt="${video.title}" loading="lazy">
+              <img class="thumbnail" src="${thumbnailSrc}" alt="${video.title}" loading="${imageLoading}" decoding="async" fetchpriority="${imageFetchPriority}">
               <div class="duration-badge">${durationFormatted}</div>
-              ${outcomeIndicatorHTML} {/* Add outcome indicator */}
+              ${outcomeIndicatorHTML}
             </div>
             <div class="video-info">
               <div class="video-title">${video.title}</div>
@@ -644,12 +677,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>
       `;
       
-      if (!document.body.classList.contains('low-effects')) {
-        videoCard.style.animationDelay = `${index * 0.05}s`;
-        videoCard.classList.add('fade-in');
-      } else {
-        videoCard.style.animationDelay = '';
-        videoCard.classList.remove('fade-in');
+      if (animate && !document.body.classList.contains('low-effects')) {
+        videoCard.classList.add('card-enter');
       }
 
       // Cache metadata using the preloader utility if available
@@ -671,7 +700,7 @@ document.addEventListener('DOMContentLoaded', async () => {
    * @param {Array} videosToRender - Array of video objects to render
    * @param {boolean} append - Whether to append to the grid or replace its content
    */
-  function renderVideos(videosToRender, append = false) {
+  async function renderVideos(videosToRender, append = false) {
     let displayedVideos = videosToRender;
     
     // Apply favorite filtering *only* to the videos being rendered in this batch
@@ -683,7 +712,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // If appending, check if the filtered list for this batch is empty
     if (append && displayedVideos.length === 0) {
         // Don't show "no videos" message if just appending an empty filtered batch
-        setupPreloading(); // Still need to potentially setup preloading for existing items
+        updateInfiniteScrollObserverState();
         return;
     }
     
@@ -703,20 +732,33 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!append) {
         videosGrid.innerHTML = '';
     }
-    
-    const fragment = document.createDocumentFragment();
 
-    // Use the helper function to create elements
-    displayedVideos.forEach((video, index) => {
-      // Calculate overall index based on whether appending or not
-      const overallIndex = append ? videosGrid.children.length + index : index;
-      const videoCard = createVideoCardElement(video, overallIndex);
-      fragment.appendChild(videoCard);
-    });
+    const chunkSize = 8;
+    const baseIndex = append ? videosGrid.querySelectorAll('.video-card').length : 0;
 
-    videosGrid.appendChild(fragment);
-    
-    setupPreloading(); // Setup preloading for newly added cards
+    for (let start = 0; start < displayedVideos.length; start += chunkSize) {
+      const fragment = document.createDocumentFragment();
+      const chunk = displayedVideos.slice(start, start + chunkSize);
+
+      chunk.forEach((video, index) => {
+        const overallIndex = baseIndex + start + index;
+        const isFirstViewportBatch = !append && overallIndex < 6;
+        const videoCard = createVideoCardElement(video, {
+          animate: !append,
+          highPriorityThumbnail: isFirstViewportBatch
+        });
+        fragment.appendChild(videoCard);
+      });
+
+      videosGrid.appendChild(fragment);
+      setupPreloading(); // Setup preloading for newly added cards
+
+      if (start + chunkSize < displayedVideos.length) {
+        await nextFrame();
+      }
+    }
+
+    updateInfiniteScrollObserverState();
   }
   
   /**
@@ -738,40 +780,30 @@ document.addEventListener('DOMContentLoaded', async () => {
         infoMessage.textContent = 'Limited preloading available in this browser';
         document.querySelector('.videos-header').appendChild(infoMessage);
       }
-       // Add styles if not already added
-       if (!document.getElementById('limited-preload-styles')) {
-           const style = document.createElement('style');
-           style.id = 'limited-preload-styles';
-           style.textContent = `
-             .preload-info-message { font-size: 12px; color: var(--text-secondary); margin-left: 10px; padding: 4px 8px; background-color: rgba(92, 108, 255, 0.1); border-radius: var(--radius-sm); display: inline-block; }
-             .limited-preloading .preload-indicator { opacity: 0.5; }
-           `;
-           document.head.appendChild(style);
-       }
     }
-    
-    // Intersection Observer for initial segment preload when card enters viewport
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const videoId = entry.target.dataset.id;
-          if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegment === 'function') {
-             window.VideoPreloader.preloadSegment(videoId, 0, 'low')
-               .then(success => { if (success) entry.target.classList.add('preloaded'); })
-               .catch(error => { console.warn(`Error preloading segment 0 for video ${videoId}:`, error); });
+
+    if (!preloadObserver) {
+      preloadObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const videoId = entry.target.dataset.id;
+            if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegment === 'function') {
+              window.VideoPreloader.preloadSegment(videoId, 0, 'low')
+                .then(success => { if (success) entry.target.classList.add('preloaded'); })
+                .catch(error => { console.warn(`Error preloading segment 0 for video ${videoId}:`, error); });
+            }
+            preloadObserver.unobserve(entry.target); // Preload only once on intersection
           }
-          observer.unobserve(entry.target); // Preload only once on intersection
-        }
-      });
-    }, { rootMargin: '200px', threshold: 0.1 }); // Increased rootMargin
-    
-    // Debounced preloading on hover
+        });
+      }, { rootMargin: '200px', threshold: 0.1 });
+    }
+
     const debouncedPreload = debounce((cardElement, id) => {
-       if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegments === 'function') {
-          window.VideoPreloader.preloadSegments(id, 2, 'low') // Preload first 2 segments on hover
-            .then(results => { if (results && results.some(success => success)) cardElement.classList.add('preloaded'); })
-            .catch(error => { console.warn(`Error preloading segments on hover for video ${id}:`, error); });
-       }
+      if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegments === 'function') {
+        window.VideoPreloader.preloadSegments(id, 2, 'low') // Preload first 2 segments on hover
+          .then(results => { if (results && results.some(success => success)) cardElement.classList.add('preloaded'); })
+          .catch(error => { console.warn(`Error preloading segments on hover for video ${id}:`, error); });
+      }
     }, 300); // 300ms debounce delay
 
     const shouldAttachHoverPreload = !document.body.classList.contains('low-effects');
@@ -781,9 +813,68 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (shouldAttachHoverPreload) {
         card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
       }
-      observer.observe(card);
+      preloadObserver.observe(card);
       card.classList.add('preload-observed'); // Mark card as observed
     });
+  }
+
+  function loadNextPageIfNeeded() {
+    if (isLoading || currentPage >= totalPages) {
+      return;
+    }
+
+    const nextPage = currentPage + 1;
+    if (pendingPage === nextPage) {
+      return;
+    }
+
+    loadVideos(nextPage, true);
+  }
+
+  function updateInfiniteScrollObserverState() {
+    if (!videosLoadSentinel) {
+      return;
+    }
+
+    const isAtEnd = currentPage >= totalPages;
+    videosLoadSentinel.classList.toggle('is-idle', isAtEnd);
+    videosLoadSentinel.setAttribute('aria-hidden', isAtEnd ? 'true' : 'false');
+  }
+
+  const handleInfiniteScroll = debounce(() => {
+    if (isLoading || currentPage >= totalPages) {
+      return;
+    }
+
+    const scrollThreshold = 1200;
+    const scrollPosition = window.innerHeight + window.scrollY;
+    const documentHeight = document.documentElement.scrollHeight;
+
+    if (scrollPosition >= documentHeight - scrollThreshold) {
+      loadNextPageIfNeeded();
+    }
+  }, 100);
+
+  function initializeInfiniteScroll() {
+    if (!videosLoadSentinel) {
+      return;
+    }
+
+    if ('IntersectionObserver' in window) {
+      infiniteScrollObserver = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            loadNextPageIfNeeded();
+          }
+        });
+      }, { root: null, rootMargin: '1200px 0px', threshold: 0 });
+
+      infiniteScrollObserver.observe(videosLoadSentinel);
+    } else {
+      window.addEventListener('scroll', handleInfiniteScroll, { passive: true });
+    }
+
+    updateInfiniteScrollObserverState();
   }
   
   /**
@@ -872,25 +963,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Infinite Scroll Handler - Optimized for responsiveness
-   */
-  const handleInfiniteScroll = debounce(() => {
-    if (isLoading || currentPage >= totalPages) {
-      return; // Don't load if already loading or no more pages
-    }
-
-    // More aggressive threshold for faster scrolling
-    const scrollThreshold = 3000; // Increased to 3000px for earlier loading
-    const scrollPosition = window.innerHeight + window.scrollY;
-    const documentHeight = document.documentElement.scrollHeight;
-    
-    if (scrollPosition >= documentHeight - scrollThreshold) {
-      console.log(`Loading page ${currentPage + 1}`);
-      loadVideos(currentPage + 1, true); // Load next page and append
-    }
-  }, 50); // Reduced debounce for more responsive detection
-
-  /**
    * Connect to the Server-Sent Events endpoint
    */
   function connectSSE() {
@@ -955,21 +1027,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Create and prepend the new video card element
     // Format duration if needed (assuming utils are loaded)
     newVideo.duration_formatted = window.VideoUtils.formatDuration(newVideo.duration);
-    const videoCard = createVideoCardElement(newVideo, 0); // Create card with index 0 for animation
-    videosGrid.prepend(videoCard); // Add to the beginning of the grid
-
-    // Re-apply animation delays to all cards to maintain order
-    const shouldAnimateCards = !document.body.classList.contains('low-effects');
-    Array.from(videosGrid.children).forEach((card, index) => {
-      if (shouldAnimateCards) {
-        card.style.animationDelay = `${index * 0.05}s`;
-      } else {
-        card.style.animationDelay = '';
-      }
+    const videoCard = createVideoCardElement(newVideo, {
+      animate: !document.body.classList.contains('low-effects'),
+      highPriorityThumbnail: false
     });
+    videosGrid.prepend(videoCard); // Add to the beginning of the grid
 
     // Setup preloading for the new card
     setupPreloading();
+    updateInfiniteScrollObserverState();
 
     // Remove "No videos found" message if it exists
     const noVideosMessage = videosGrid.querySelector('.loading');
@@ -1015,73 +1081,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Initialize GSAP-based smooth scrolling
+   * Keep native browser scrolling for input responsiveness and lower scroll jitter.
    */
   function initializeGsapSmoothScroll() {
-    const effectsConfig = window.VideoUIEffects || {};
-    if (!effectsConfig.smoothScrollEnabled) {
-      return;
-    }
-
-    if (typeof gsap === 'undefined' || typeof ScrollTrigger === 'undefined' || typeof ScrollToPlugin === 'undefined') {
-      console.error('GSAP, ScrollTrigger, or ScrollToPlugin not loaded. Smooth scrolling disabled.');
-      return;
-    }
-
-    gsap.registerPlugin(ScrollTrigger, ScrollToPlugin);
-
-    // Use the window as the scroll target
-    const scrollTarget = window; 
-    let targetScrollY = window.scrollY;
-    const scrollSensitivity = 1.0; // Adjust sensitivity as needed
-    const animationDuration = 0.4; // Reduced duration for more responsive scrolling
-    const animationEase = "power1.out"; // Lighter ease for better performance
-
-    // Prevent default scroll behavior and animate with GSAP
-    window.addEventListener('wheel', (event) => {
-      event.preventDefault(); // Prevent default browser scroll
-
-      // Calculate target scroll position based on wheel delta
-      targetScrollY += event.deltaY * scrollSensitivity;
-
-      // Clamp target scroll to bounds (0 to max scroll height)
-      const maxScroll = document.documentElement.scrollHeight - window.innerHeight;
-      targetScrollY = Math.max(0, Math.min(targetScrollY, maxScroll));
-
-      // Kill any existing scroll tween to avoid conflicts
-      if (currentScrollTween) {
-        currentScrollTween.kill();
-      }
-
-      // Animate scroll position using GSAP's ScrollToPlugin
-      currentScrollTween = gsap.to(scrollTarget, {
-        duration: animationDuration,
-        ease: animationEase,
-        scrollTo: {
-          y: targetScrollY,
-          autoKill: false // Prevent ScrollTrigger from killing tween
-        },
-        onComplete: () => {
-          currentScrollTween = null; // Clear tween reference on completion
-        },
-        overwrite: true // Overwrite existing tweens on the same target
-      });
-
-    }, { passive: false }); // Need passive: false to call preventDefault
-
-    // Listener to synchronize targetScrollY when scrolling via scrollbar/keyboard
-    window.addEventListener('scroll', () => {
-      // Only update if GSAP isn't currently animating the scroll
-      if (!currentScrollTween) {
-        targetScrollY = window.scrollY;
-      }
-    });
-
-    console.log('GSAP smooth scroll initialized.');
-
-    // Refresh ScrollTrigger to ensure it's aware of page height changes
-    // Might need to call this after videos are loaded/added if height changes significantly
-    // ScrollTrigger.refresh(); 
+    console.log('[Performance] Native scrolling enabled.');
   }
 
   /**
@@ -1189,12 +1192,109 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
+  function shouldUseReducedMotion() {
+    if (document.body.classList.contains('low-effects')) {
+      return true;
+    }
+    return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function resetOverlayTransformVariables(overlay) {
+    overlay.style.removeProperty('--overlay-origin-translate-x');
+    overlay.style.removeProperty('--overlay-origin-translate-y');
+    overlay.style.removeProperty('--overlay-origin-scale');
+  }
+
+  function setOverlayOriginFromEvent(overlay, event) {
+    if (!event || !event.target || shouldUseReducedMotion()) {
+      overlay.classList.remove('has-origin');
+      resetOverlayTransformVariables(overlay);
+      return;
+    }
+
+    const card = event.target.closest && event.target.closest('.video-card');
+    if (!card) {
+      overlay.classList.remove('has-origin');
+      resetOverlayTransformVariables(overlay);
+      return;
+    }
+
+    const cardRect = card.getBoundingClientRect();
+    const viewportCenterX = window.innerWidth / 2;
+    const viewportCenterY = window.innerHeight / 2;
+    const cardCenterX = cardRect.left + (cardRect.width / 2);
+    const cardCenterY = cardRect.top + (cardRect.height / 2);
+    const translateX = cardCenterX - viewportCenterX;
+    const translateY = cardCenterY - viewportCenterY;
+    const targetWidth = Math.min(window.innerWidth * 0.95, 1450);
+    const originScale = Math.max(0.3, Math.min(0.92, cardRect.width / targetWidth));
+
+    overlay.style.setProperty('--overlay-origin-translate-x', `${Math.round(translateX)}px`);
+    overlay.style.setProperty('--overlay-origin-translate-y', `${Math.round(translateY)}px`);
+    overlay.style.setProperty('--overlay-origin-scale', originScale.toFixed(3));
+    overlay.classList.add('has-origin');
+  }
+
+  function showOverlayWithTransition(overlay, event) {
+    if (overlayOpenTimer) {
+      clearTimeout(overlayOpenTimer);
+      overlayOpenTimer = null;
+    }
+
+    if (overlayCloseTimer) {
+      clearTimeout(overlayCloseTimer);
+      overlayCloseTimer = null;
+    }
+
+    overlay.classList.remove('is-closing');
+    setOverlayOriginFromEvent(overlay, event);
+    overlay.classList.add('visible');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('overlay-open');
+
+    if (!shouldUseReducedMotion()) {
+      overlay.classList.add('is-opening');
+      overlayOpenTimer = setTimeout(() => {
+        overlayOpenTimer = null;
+        overlay.classList.remove('is-opening');
+        overlay.classList.remove('has-origin');
+        resetOverlayTransformVariables(overlay);
+      }, OVERLAY_OPEN_TRANSITION_MS);
+    } else {
+      overlay.classList.remove('has-origin');
+      resetOverlayTransformVariables(overlay);
+    }
+  }
+
+  function finalizeOverlayClose(overlay, updateHistory) {
+    if (overlayOpenTimer) {
+      clearTimeout(overlayOpenTimer);
+      overlayOpenTimer = null;
+    }
+
+    overlay.classList.remove('visible');
+    overlay.classList.remove('is-opening');
+    overlay.classList.remove('is-closing');
+    overlay.classList.remove('has-origin');
+    overlay.setAttribute('aria-hidden', 'true');
+    resetOverlayTransformVariables(overlay);
+    document.body.classList.remove('overlay-open');
+
+    if (updateHistory && window.location.pathname !== '/') {
+      history.pushState({}, '', '/');
+    }
+
+    // Reset page title
+    document.title = vodsName;
+  }
+
   /**
    * Open video overlay with specified video ID
    * @param {string} videoId - The ID of the video to open
    * @param {Event} event - Optional event to prevent default behavior
    */
-  async function openVideoOverlay(videoId, event) {
+  async function openVideoOverlay(videoId, event, options = {}) {
+    const { updateHistory = true } = options;
     if (event) {
       event.preventDefault();
     }
@@ -1203,6 +1303,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Show loading state
       const overlay = document.getElementById('video-overlay');
       const playerContainer = document.querySelector('.video-overlay-player-container');
+      const overlayVideo = document.getElementById('overlay-video-player');
+      overlayVideo.classList.remove('is-ready');
+      playerContainer.classList.remove('is-video-ready');
       
       // Add loading indicator
       const loadingOverlay = document.createElement('div');
@@ -1210,18 +1313,17 @@ document.addEventListener('DOMContentLoaded', async () => {
       loadingOverlay.innerHTML = '<div class="loading-spinner"></div>';
       playerContainer.appendChild(loadingOverlay);
       
-      // Show overlay
-      overlay.classList.add('visible');
-      overlay.setAttribute('aria-hidden', 'false');
-      document.body.classList.add('overlay-open');
+      showOverlayWithTransition(overlay, event);
       
       // Update URL
-      const newUrl = `/watch/${videoId}`;
-      history.pushState({ videoOverlay: true, videoId }, '', newUrl);
+      if (updateHistory) {
+        const newUrl = `/watch/${videoId}`;
+        history.pushState({ videoOverlay: true, videoId }, '', newUrl);
+      }
 
       // Suspend preview system to free up resources
-      if (window.videoPreviewManager) {
-        window.videoPreviewManager.pause();
+      if (videoPreviewManager) {
+        videoPreviewManager.pause();
       }
 
       // Load video metadata
@@ -1263,7 +1365,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.title = `${vodsName} - ${video.title}`;
       
       // Initialize video player
-      const overlayVideo = document.getElementById('overlay-video-player');
       overlayVideo.src = `/api/videos/${videoId}/stream`;
 
       const removeLoadingOverlay = () => {
@@ -1275,6 +1376,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const onOverlayReady = () => {
         cleanupOverlayLoadingListeners();
         removeLoadingOverlay();
+        playerContainer.classList.add('is-video-ready');
+        overlayVideo.classList.add('is-ready');
       };
 
       const cleanupOverlayLoadingListeners = () => {
@@ -1322,20 +1425,34 @@ document.addEventListener('DOMContentLoaded', async () => {
   /**
    * Close the video overlay
    */
-  function closeVideoOverlay() {
+  function closeVideoOverlay(options = {}) {
+    const { updateHistory = true } = options;
     const overlay = document.getElementById('video-overlay');
+    const playerContainer = document.querySelector('.video-overlay-player-container');
 
     // Stop FPS monitoring
     stopOverlayFPSMonitoring();
 
-    // Hide overlay
-    overlay.classList.remove('visible');
-    overlay.setAttribute('aria-hidden', 'true');
-    document.body.classList.remove('overlay-open');
+    if (overlayCloseTimer) {
+      clearTimeout(overlayCloseTimer);
+      overlayCloseTimer = null;
+    }
+
+    const animateClose = overlay.classList.contains('visible') && !shouldUseReducedMotion();
+    if (animateClose) {
+      overlay.classList.remove('visible');
+      overlay.classList.add('is-closing');
+      overlayCloseTimer = setTimeout(() => {
+        overlayCloseTimer = null;
+        finalizeOverlayClose(overlay, updateHistory);
+      }, OVERLAY_CLOSE_TRANSITION_MS);
+    } else {
+      finalizeOverlayClose(overlay, updateHistory);
+    }
 
     // Resume preview system
-    if (window.videoPreviewManager) {
-      window.videoPreviewManager.resume();
+    if (videoPreviewManager) {
+      videoPreviewManager.resume();
     }
 
     // Clean up Plyr player
@@ -1351,6 +1468,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Clear video source
     const overlayVideo = document.getElementById('overlay-video-player');
+    playerContainer.classList.remove('is-video-ready');
+    overlayVideo.classList.remove('is-ready');
     if (overlayVideo.src && overlayVideo.src.startsWith('blob:')) {
       URL.revokeObjectURL(overlayVideo.src);
     }
@@ -1361,12 +1480,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     overlayCurrentVideoId = null;
     overlayVideoMetadata = null;
     overlayBaseShareUrl = null;
-    
-    // Update URL back to home
-    history.pushState({}, '', '/');
-    
-    // Reset page title
-    document.title = vodsName;
     
     // Remove any loading overlays
     const loadingOverlays = document.querySelectorAll('.video-overlay-loading');
@@ -1614,12 +1727,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       // URL indicates we should show overlay
       const videoId = watchMatch[1];
       if (!overlayCurrentVideoId || overlayCurrentVideoId !== videoId) {
-        openVideoOverlay(videoId);
+        openVideoOverlay(videoId, null, { updateHistory: false });
       }
     } else {
       // URL indicates we should close overlay
       if (overlayCurrentVideoId) {
-        closeVideoOverlay();
+        closeVideoOverlay({ updateHistory: false });
       }
     }
   }
@@ -1741,7 +1854,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (advancedSearchToggle) {
     advancedSearchToggle.addEventListener('change', handleAdvancedSearchToggle);
   }
-  window.addEventListener('scroll', handleInfiniteScroll); // Add scroll listener
   
   // Video overlay event listeners
   document.getElementById('overlay-favorite-btn').addEventListener('click', handleOverlayFavoriteClick);
@@ -1777,7 +1889,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   sortSelect.value = sortBy; // Set dropdown to reflect default sort
   pollScanStatus(); // Check initial scan status on page load
   connectSSE(); // Connect to Server-Sent Events
-  initializeGsapSmoothScroll(); // Initialize GSAP smooth scrolling
+  initializeInfiniteScroll();
+  initializeGsapSmoothScroll(); // Keep native scroll behavior
   
   // Handle direct URL navigation to video overlay
   const currentPath = window.location.pathname;
@@ -1786,19 +1899,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     const videoId = watchMatch[1];
     // Wait for page to load before opening overlay
     setTimeout(() => {
-      openVideoOverlay(videoId);
+      openVideoOverlay(videoId, null, { updateHistory: false });
     }, 500);
   }
-
-  // Add focus styles dynamically
-  const style = document.createElement('style');
-  style.textContent = `
-    .search-container.focused .search-input {
-      border-color: var(--accent-color);
-      box-shadow: 0 0 0 3px rgba(92, 108, 255, 0.2);
-    }
-  `;
-  document.head.appendChild(style);
 
   /**
    * Update favorite indicators on the grid based on current localStorage status.

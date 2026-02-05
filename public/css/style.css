@@ -190,7 +190,7 @@ body.low-effects .duration-badge {
   -webkit-backdrop-filter: none;
 }
 
-body.low-effects .fade-in {
+body.low-effects .card-enter {
   animation: none !important;
   opacity: 1 !important;
   transform: none !important;
@@ -691,6 +691,27 @@ select option:hover, select option:focus {
   margin-bottom: 60px;
 }
 
+.videos-load-sentinel {
+  width: 100%;
+  height: 1px;
+  margin-top: -20px;
+  pointer-events: none;
+}
+
+.videos-load-sentinel.is-idle {
+  visibility: hidden;
+}
+
+.preload-info-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: 10px;
+  padding: 4px 8px;
+  background-color: rgba(92, 108, 255, 0.1);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+
 .video-card {
   background: var(--gradient-secondary);
   border-radius: var(--radius-lg);
@@ -988,8 +1009,8 @@ select option:hover, select option:focus {
   }
 }
 
-/* Fade in animation for video cards */
-.video-card {
+/* Entry animation for newly rendered cards only */
+.video-card.card-enter {
   animation: fadeInUp 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
   opacity: 0;
   transform: translateY(20px);
@@ -1012,14 +1033,6 @@ select option:hover, select option:focus {
     transform: translateY(10px);
   }
 }
-
-/* Staggered animation for video grid */
-.video-card:nth-child(1) { animation-delay: 0.1s; }
-.video-card:nth-child(2) { animation-delay: 0.2s; }
-.video-card:nth-child(3) { animation-delay: 0.3s; }
-.video-card:nth-child(4) { animation-delay: 0.4s; }
-.video-card:nth-child(5) { animation-delay: 0.5s; }
-.video-card:nth-child(6) { animation-delay: 0.6s; }
 
 /* Player Page */
 .player-page {
@@ -1782,6 +1795,12 @@ a:focus {
   opacity: 1;
 }
 
+.video-overlay.is-closing {
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+}
+
 /* Optimize will-change only during transitions */
 .video-overlay:not(.visible) {
   will-change: opacity;
@@ -1833,10 +1852,27 @@ a:focus {
   transform: translateY(0);
 }
 
+.video-overlay.is-opening.has-origin .video-overlay-container {
+  opacity: 0.72;
+  transform: translate3d(
+    var(--overlay-origin-translate-x, 0),
+    var(--overlay-origin-translate-y, 0),
+    0
+  ) scale(var(--overlay-origin-scale, 0.9));
+}
+
+.video-overlay.is-closing .video-overlay-container {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+}
+
 /* Respect reduced motion preferences */
 @media (prefers-reduced-motion: reduce) {
+  .video-overlay-player-container,
+  #overlay-video-player,
   .video-overlay-container {
     transform: none;
+    opacity: 1;
     transition: opacity var(--transition-fast);
   }
 
@@ -1887,7 +1923,9 @@ a:focus {
   overflow: hidden;
   position: relative;
   contain: layout style paint;
-  transform: translateZ(0);
+  transform: translateZ(0) scale(0.985);
+  opacity: 0.9;
+  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
 }
 
 #overlay-video-player {
@@ -1897,6 +1935,25 @@ a:focus {
   max-height: 70vh;
   object-fit: contain;
   display: block;
+  opacity: 0;
+  transform: scale(1.02);
+  transition: opacity 0.22s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.video-overlay.visible .video-overlay-player-container {
+  transform: translateZ(0) scale(1);
+  opacity: 1;
+}
+
+.video-overlay.is-opening.has-origin .video-overlay-player-container {
+  transform: translateZ(0) scale(0.9);
+  opacity: 0.72;
+}
+
+.video-overlay-player-container.is-video-ready #overlay-video-player,
+#overlay-video-player.is-ready {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .video-overlay-info {
@@ -2198,6 +2255,8 @@ body.overlay-open {
 /* Accessibility improvements */
 @media (prefers-reduced-motion: reduce) {
   .video-overlay,
+  .video-overlay-player-container,
+  #overlay-video-player,
   .video-overlay-container {
     transition: none;
   }

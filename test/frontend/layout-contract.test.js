@@ -25,6 +25,7 @@ describe('Frontend layout contract', () => {
 
     expect(document.getElementById('search-input')).toBeTruthy();
     expect(document.getElementById('videos-grid')).toBeTruthy();
+    expect(document.getElementById('videos-load-sentinel')).toBeTruthy();
     expect(document.getElementById('video-overlay')).toBeTruthy();
     expect(document.getElementById('overlay-video-player')).toBeTruthy();
     expect(document.getElementById('scan-status')).toBeTruthy();
