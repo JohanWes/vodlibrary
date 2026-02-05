@@ -1,27 +1,41 @@
 // Express server with API endpoints for the video sharing/viewing software
 require('dotenv').config();
-console.log('SHARE_BASE_URL from .env:', process.env.SHARE_BASE_URL);
 
 const express = require('express');
-const cookieParser = require('cookie-parser'); // Added cookie-parser
-const app = express();
-const { initializeDatabase, getVideoByPath, deleteVideo, getVideoById } = require('./db/database'); // Added getVideoByPath, deleteVideo, getVideoById
-const { scanLibrary, processVideoFile, isVideoFile } = require('./lib/scanner'); // Added processVideoFile, isVideoFile
+const cookieParser = require('cookie-parser');
 const path = require('path');
 const fs = require('fs');
-const chokidar = require('chokidar'); // Added chokidar
+const chokidar = require('chokidar');
+
+const {
+  initializeDatabase,
+  getVideoByPath,
+  deleteVideo,
+  getVideoById
+} = require('./db/database');
+const { scanLibrary, processVideoFile, isVideoFile } = require('./lib/scanner');
 const videoCache = require('./lib/cache');
 const cdnManager = require('./lib/cdn');
+
+const app = express();
+
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const FIXED_STREAM_SEGMENT_SIZE = 2 * 1024 * 1024;
+
+function debugLog(...args) {
+  if (LOG_LEVEL === 'debug') {
+    console.log(...args);
+  }
+}
 
 // Get port and IP from environment variables with fallbacks
 const port = process.env.PORT || 8005;
 const publicIp = process.env.HOST_IP || 'localhost';
 const basePath = process.env.BASE_PATH || '';
 const vodsName = process.env.VODS_NAME || 'VODlibrary';
-console.log(`Using base path: "${basePath}", VODs name: "${vodsName}"`);
 
 // Initialize server-side caching
-const cacheMaxSize = parseInt(process.env.CACHE_MAX_SIZE || '500', 10) * 1024 * 1024; // Convert MB to bytes
+const cacheMaxSize = parseInt(process.env.CACHE_MAX_SIZE || '500', 10) * 1024 * 1024;
 const cacheTtl = parseInt(process.env.CACHE_TTL || '3600', 10);
 const cachePopularityThreshold = parseInt(process.env.CACHE_POPULARITY_THRESHOLD || '0', 10);
 const cacheMaxSegmentsPerVideo = parseInt(process.env.CACHE_MAX_SEGMENTS_PER_VIDEO || '3', 10);
@@ -32,8 +46,6 @@ videoCache.updateConfig({
   popularityThreshold: cachePopularityThreshold,
   maxSegmentsPerVideo: cacheMaxSegmentsPerVideo
 });
-
-console.log(`Server-side cache initialized with max size: ${cacheMaxSize / (1024 * 1024)}MB`);
 
 // Initialize CDN if configured
 const cdnEnabled = process.env.CDN_ENABLED === 'true';
@@ -50,221 +62,226 @@ cdnManager.initCdn({
   baseUrl: cdnBaseUrl,
   token: cdnToken,
   region: cdnRegion,
-  pathPrefix: basePath.replace(/^\//, ''), // Remove leading slash if present
+  pathPrefix: basePath.replace(/^\//, ''),
   signedUrls: cdnSignedUrls,
   signedUrlsSecret: cdnSignedUrlsSecret
 });
 
 app.use(express.json());
-app.use(express.urlencoded({ extended: true })); // Added for parsing form data
-app.use(cookieParser()); // Use cookie-parser middleware
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-// --- SSE Setup ---
 let sseClients = new Set();
+
+function removeSseClient(client) {
+  if (!client) {
+    return;
+  }
+
+  if (client.heartbeatInterval) {
+    clearInterval(client.heartbeatInterval);
+  }
+
+  sseClients.delete(client);
+}
 
 function sendSseUpdate(data) {
   const message = `data: ${JSON.stringify(data)}\n\n`;
-  sseClients.forEach(client => client.res.write(message));
-  console.log(`Sent SSE update (${data.type}) to ${sseClients.size} clients.`);
-}
-// --- End SSE Setup ---
+  const staleClients = [];
 
-const thumbnailDir = path.join(__dirname, 'public', 'thumbnails');
-if (!fs.existsSync(path.join(__dirname, 'public'))) {
-  fs.mkdirSync(path.join(__dirname, 'public'));
+  for (const client of sseClients) {
+    if (client.res.writableEnded || client.res.destroyed) {
+      staleClients.push(client);
+      continue;
+    }
+
+    try {
+      client.res.write(message);
+    } catch (_error) {
+      staleClients.push(client);
+    }
+  }
+
+  staleClients.forEach(removeSseClient);
+  debugLog(`Sent SSE update (${data.type}) to ${sseClients.size} clients.`);
+}
+
+const publicDir = path.join(__dirname, 'public');
+const thumbnailDir = path.join(publicDir, 'thumbnails');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
 }
 if (!fs.existsSync(thumbnailDir)) {
-  fs.mkdirSync(thumbnailDir);
+  fs.mkdirSync(thumbnailDir, { recursive: true });
 }
 
-// --- Authentication Setup ---
 const SESSION_KEY = process.env.SESSION_KEY;
-const ENABLE_AUTH = process.env.ENABLE_AUTH === 'true'; // New: Master switch for authentication
+const ENABLE_AUTH = process.env.ENABLE_AUTH === 'true';
 const AUTH_COOKIE_NAME = 'auth_token';
-const AUTH_COOKIE_VALUE = 'valid-session'; // Simple token value
+const AUTH_COOKIE_VALUE = 'valid-session';
 const AUTH_COOKIE_OPTIONS = {
-  httpOnly: true, // Prevent client-side JS access
-  maxAge: 7 * 24 * 60 * 60 * 10000, // 70 days
-  // secure: process.env.NODE_ENV === 'production', // Use only with HTTPS
-  path: basePath || '/', // Ensure cookie path matches base path
+  httpOnly: true,
+  maxAge: 7 * 24 * 60 * 60 * 10000,
+  path: basePath || '/'
 };
 
-// Middleware to check authentication
 function checkAuth(req, res, next) {
-  // If authentication is explicitly disabled, allow all access
   if (!ENABLE_AUTH) {
-    // console.log('Authentication is disabled. Allowing access.'); // Removed excessive log
     return next();
   }
 
-  // If authentication is enabled but SESSION_KEY is not set, prevent access
   if (!SESSION_KEY) {
-    console.error('Authentication is enabled but SESSION_KEY is not set. Please set SESSION_KEY or disable authentication (ENABLE_AUTH=false).');
-    // Render a simple error page or redirect to a configuration error page
+    console.error('Authentication is enabled but SESSION_KEY is not set.');
     return res.status(500).send('Server configuration error: SESSION_KEY is required when authentication is enabled.');
   }
 
-  // Allow access to login page, login POST, CSS, and favicon without auth
   const allowedPaths = [
     basePath + '/login.html',
     basePath + '/login',
     basePath + '/css/style.css',
     basePath + '/favicon.ico'
   ];
+
   if (allowedPaths.includes(req.path) || (req.path === basePath + '/login' && req.method === 'POST')) {
     return next();
   }
 
-  // Check for the authentication cookie
   if (req.cookies && req.cookies[AUTH_COOKIE_NAME] === AUTH_COOKIE_VALUE) {
-    return next(); // User is authenticated
+    return next();
   }
 
-  // User is not authenticated, redirect to login
-  console.log(`Auth failed for ${req.path}, redirecting to login.`);
-  res.redirect(basePath + '/login.html');
+  return res.redirect(basePath + '/login.html');
 }
-// --- End Authentication Setup ---
 
+const staticCacheDuration = 86400 * 1000;
 
-// Define cache duration (1 day in milliseconds)
-const staticCacheDuration = 86400 * 1000; // 86400 seconds * 1000 ms/sec
-
-// Serve previews with caching headers
-app.use(basePath + '/previews', express.static(path.join(__dirname, 'public', 'previews'), {
+// Static public media. These are intentionally public for preview UX.
+app.use(basePath + '/previews', express.static(path.join(publicDir, 'previews'), {
+  maxAge: staticCacheDuration
+}));
+app.use(basePath + '/thumbnails', express.static(path.join(publicDir, 'thumbnails'), {
   maxAge: staticCacheDuration
 }));
 
-// Serve thumbnails with caching headers
-app.use(basePath + '/thumbnails', express.static(path.join(__dirname, 'public', 'thumbnails'), {
-  maxAge: staticCacheDuration
-}));
-
-// --- Routes & Middleware Order ---
-
-// Serve login page explicitly (before auth middleware)
-app.get(basePath + '/login.html', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+// Login/public assets
+app.get(basePath + '/login.html', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'login.html'));
 });
 
-// Serve CSS explicitly (needed for login page, before auth middleware)
-app.get(basePath + '/css/style.css', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'css', 'style.css'));
+app.get(basePath + '/css/style.css', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'css', 'style.css'));
 });
 
-// Serve favicon explicitly (before auth middleware)
-app.get(basePath + '/favicon.ico', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'favicon.ico'));
+app.get(basePath + '/favicon.ico', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'favicon.ico'));
 });
 
-// Handle login form submission (before auth middleware)
 app.post(basePath + '/login', (req, res) => {
   if (!SESSION_KEY) {
-    console.log('Login attempt skipped: SESSION_KEY not set.');
-    return res.redirect(basePath + '/'); // Redirect to main page if auth disabled
+    return res.redirect(basePath + '/');
   }
 
   const submittedKey = req.body.sessionKey;
   if (submittedKey === SESSION_KEY) {
-    console.log('Login successful, setting auth cookie.');
     res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
-    res.redirect(basePath + '/'); // Redirect to the main index page
-  } else {
-    console.log('Login failed: Invalid key submitted.');
-    res.redirect(basePath + '/login.html?error=1'); // Redirect back to login with error
+    return res.redirect(basePath + '/');
   }
+
+  return res.redirect(basePath + '/login.html?error=1');
 });
 
-// Handle URL-based session key (before auth middleware)
 app.get(basePath + '/:sessionKeyParam/*', (req, res, next) => {
   if (!SESSION_KEY) {
-    return next(); // No session key configured, skip
+    return next();
   }
 
   const sessionKeyParam = req.params.sessionKeyParam;
-  if (sessionKeyParam === SESSION_KEY) {
-    console.log('URL session key valid, setting auth cookie and redirecting.');
-    res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
-
-    // Reconstruct the URL without the session key parameter
-    // req.originalUrl includes query parameters
-    const originalUrl = req.originalUrl;
-    const newPath = originalUrl.replace(`/${sessionKeyParam}`, '');
-    
-    // Ensure the newPath starts with basePath if it was originally present
-    const redirectUrl = newPath.startsWith(basePath) ? newPath : basePath + newPath;
-
-    return res.redirect(redirectUrl);
+  if (sessionKeyParam !== SESSION_KEY) {
+    return next();
   }
-  next(); // Session key in URL is invalid or not present, proceed to next middleware (checkAuth)
+
+  res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
+  const newPath = req.originalUrl.replace(`/${sessionKeyParam}`, '');
+  const redirectUrl = newPath.startsWith(basePath) ? newPath : basePath + newPath;
+  return res.redirect(redirectUrl);
 });
 
-// --- Server-Sent Events Endpoint (Moved Before Auth) ---
+// SSE endpoint is public by design (live library updates for grid view).
 app.get(basePath + '/api/updates', (req, res) => {
-  // Set headers for SSE
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
+    Connection: 'keep-alive'
   });
-  res.write('\n'); // Initial newline to establish connection
 
-  // Generate a unique ID for this client
-  const clientId = Date.now();
-  const newClient = {
-    id: clientId,
-    res: res, // Store the response object to send events
+  res.write('retry: 5000\n\n');
+
+  const client = {
+    id: Date.now() + Math.random(),
+    res,
+    heartbeatInterval: null
   };
 
-  // Add the new client to the set managed via app.locals
-  const sseClients = req.app.locals.sseClients; // Access clients via app.locals
-  if (!sseClients) {
-      console.error("sseClients not found in app.locals. SSE will not work.");
-      return res.end(); // End response if setup failed
-  }
-  sseClients.add(newClient);
-  console.log(`SSE client connected: ${clientId}. Total clients: ${sseClients.size}`);
+  client.heartbeatInterval = setInterval(() => {
+    if (res.writableEnded || res.destroyed) {
+      removeSseClient(client);
+      return;
+    }
 
-  // Send a simple connected message (optional)
-  // res.write(`event: connected\ndata: ${JSON.stringify({ clientId })}\n\n`);
+    try {
+      res.write(': ping\n\n');
+    } catch (_error) {
+      removeSseClient(client);
+    }
+  }, 25000);
 
-  // Handle client disconnect
+  sseClients.add(client);
+
   req.on('close', () => {
-    sseClients.delete(newClient);
-    console.log(`SSE client disconnected: ${clientId}. Total clients: ${sseClients.size}`);
-    res.end(); // Ensure response is ended
+    removeSseClient(client);
+    res.end();
   });
-
-  // Keep connection open, further messages are sent via sendSseUpdate
 });
-// --- End SSE Endpoint ---
 
+app.get(basePath + '/api/config', (_req, res) => {
+  res.json({
+    vodsName: process.env.VODS_NAME || 'VODlibrary'
+  });
+});
 
-// Serve player page (protected) - Moved before checkAuth
+// Public preview APIs are explicitly mounted before auth.
+const publicApiRoutes = require('./routes/public-api');
+app.use(basePath + '/api', publicApiRoutes);
+
+// Protected routes below this line.
+app.use(checkAuth);
+
 app.get(basePath + '/watch/:id', async (req, res) => {
   const videoId = req.params.id;
-  const db = req.app.locals.db; // Access the database instance from app.locals
+  const db = req.app.locals.db;
 
   try {
     const video = await getVideoById(db, videoId);
-
     if (!video) {
       return res.status(404).send('Video not found');
     }
 
-    // Read the player.html file
-    let playerHtml = fs.readFileSync(path.join(__dirname, 'public', 'player.html'), 'utf8');
-
-    // Construct Open Graph meta tags
-    const ogTitle = video.title;
-    const ogType = 'video.movie'; // Or video.episode, video.tv_show, video.other
-    let ogImage = `${req.protocol}://${req.get('host')}${basePath}${video.thumbnail_path}`; // Ensure absolute URL for og:image, including basePath
-    // If CDN is enabled, use the CDN URL
-    if (cdnEnabled) {
-      ogImage = cdnManager.getCdnUrl(video.thumbnail_path, 'thumbnail'); // cdnManager should handle basePath internally if needed
+    let playerHtml = req.app.locals.playerTemplate;
+    if (!playerHtml) {
+      playerHtml = await fs.promises.readFile(path.join(publicDir, 'player.html'), 'utf8');
+      req.app.locals.playerTemplate = playerHtml;
     }
-    const ogUrl = `${req.protocol}://${req.get('host')}${basePath}/watch/${videoId}`; // Canonical URL
-    const videoStreamUrl = `${req.protocol}://${req.get('host')}${basePath}/api/video/${videoId}`; // Direct video stream URL
+
+    const ogTitle = video.title;
+    const ogType = 'video.movie';
+    const thumbnailPath = video.thumbnail_path || '/favicon.ico';
+    let ogImage = `${req.protocol}://${req.get('host')}${basePath}${thumbnailPath}`;
+    if (cdnEnabled && video.thumbnail_path) {
+      ogImage = cdnManager.getCdnUrl(video.thumbnail_path, 'thumbnail');
+    }
+
+    const ogUrl = `${req.protocol}://${req.get('host')}${basePath}/watch/${videoId}`;
+    const videoStreamUrl = `${req.protocol}://${req.get('host')}${basePath}/api/videos/${videoId}/stream`;
 
     const ogTags = `
   <meta property="og:title" content="${ogTitle}" />
@@ -280,316 +297,320 @@ app.get(basePath + '/watch/:id', async (req, res) => {
   <meta property="og:video:height" content="${video.height || 720}" />
     `;
 
-    // Inject meta tags into the <head> section
     playerHtml = playerHtml.replace('</head>', `${ogTags}\n</head>`);
-
-    // Update the title dynamically as well
     playerHtml = playerHtml.replace('<title>Loading...</title>', `<title>${ogTitle}</title>`);
 
-    res.send(playerHtml);
-
+    return res.send(playerHtml);
   } catch (error) {
     console.error(`Error serving video ${videoId}:`, error);
-    res.status(500).send('Internal Server Error');
+    return res.status(500).send('Internal Server Error');
   }
 });
 
-// Video stream route - Moved before checkAuth
 app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
   try {
     const db = req.app.locals.db;
     const video = await getVideoById(db, req.params.id);
-    
+
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
     }
-    
-    const videoPath = video.path;
-    const stat = fs.statSync(videoPath);
+
+    const stat = await fs.promises.stat(video.path);
     const fileSize = stat.size;
     const range = req.headers.range;
-    
-    const cacheMaxAge = 3600; // 1 hour in seconds
-    res.setHeader('Cache-Control', `public, max-age=${cacheMaxAge}`);
+
+    res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('ETag', `"${video.id}-${stat.mtime.getTime()}"`);
-    
+
     if (cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
       const protocol = req.protocol;
       const host = req.get('host');
       const originalUrl = `${protocol}://${host}${req.originalUrl}`;
       const cdnUrl = cdnManager.getCdnUrl(originalUrl, 'video');
-      
       return res.redirect(cdnUrl);
     }
-    
+
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
-      const start = parseInt(parts[0], 10);
-      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
-      const chunksize = (end - start) + 1;
-      
-      const cachedSegment = videoCache.getCachedSegment(video.id, Math.floor(start / (2 * 1024 * 1024)));
-      
-      const head = {
+      const start = Number.parseInt(parts[0], 10);
+      const end = parts[1] ? Number.parseInt(parts[1], 10) : fileSize - 1;
+
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end >= fileSize) {
+        return res.status(416).json({ error: 'Invalid range request' });
+      }
+
+      const segmentNumber = Math.floor(start / FIXED_STREAM_SEGMENT_SIZE);
+      const segmentStart = segmentNumber * FIXED_STREAM_SEGMENT_SIZE;
+      const segmentEnd = Math.min(segmentStart + FIXED_STREAM_SEGMENT_SIZE - 1, fileSize - 1);
+      const isCanonicalSegment = start === segmentStart && end === segmentEnd;
+
+      const cacheOptions = {
+        namespace: 'stream',
+        quality: 'fixed_2mb',
+        startByte: segmentStart,
+        endByte: segmentEnd
+      };
+
+      const cachedSegment = isCanonicalSegment
+        ? videoCache.getCachedSegment(video.id, segmentNumber, cacheOptions)
+        : null;
+
+      const chunkSize = (end - start) + 1;
+      res.writeHead(206, {
         'Content-Range': `bytes ${start}-${end}/${fileSize}`,
         'Accept-Ranges': 'bytes',
-        'Content-Length': chunksize,
-        'Content-Type': 'video/mp4',
-      };
-      
-      res.writeHead(206, head);
-      
-      if (cachedSegment) {
-        console.log(`Serving segment from cache for video ${video.id}`);
-        
-        if (cachedSegment.length === chunksize) {
-          res.end(cachedSegment);
-        } else {
-          const bufferStream = require('stream').Readable.from(cachedSegment);
-          bufferStream.pipe(res);
-        }
-      } else {
-        const file = fs.createReadStream(videoPath, { start, end });
-        file.pipe(res);
-        
-        // Only cache if it's a standard segment size or the first segment
-        if (start % (2 * 1024 * 1024) === 0 || start === 0) {
-          const segmentNumber = Math.floor(start / (2 * 1024 * 1024));
-          videoCache.cacheSegmentFromFile(
-            video.id, 
-            segmentNumber, 
-            videoPath, 
-            start, 
-            Math.min(start + (2 * 1024 * 1024) - 1, fileSize - 1)
-          ).catch(err => console.error('Error caching segment:', err));
-        }
+        'Content-Length': chunkSize,
+        'Content-Type': 'video/mp4'
+      });
+
+      if (cachedSegment && cachedSegment.length === chunkSize) {
+        res.end(cachedSegment);
+        return;
       }
-    } else {
-      const head = {
-        'Content-Length': fileSize,
-        'Content-Type': 'video/mp4',
-      };
-      
-      res.writeHead(200, head);
-      
-      fs.createReadStream(videoPath).pipe(res);
-      
-      videoCache.cacheSegmentFromFile(
-        video.id, 
-        0, 
-        videoPath, 
-        0, 
-        Math.min(2 * 1024 * 1024 - 1, fileSize - 1)
-      ).catch(err => console.error('Error caching first segment:', err));
+
+      fs.createReadStream(video.path, { start, end }).pipe(res);
+
+      if (isCanonicalSegment) {
+        videoCache.cacheSegmentFromFile(
+          video.id,
+          segmentNumber,
+          video.path,
+          segmentStart,
+          segmentEnd,
+          {
+            namespace: 'stream',
+            quality: 'fixed_2mb'
+          }
+        ).catch((cacheError) => {
+          console.error('Error caching stream segment:', cacheError);
+        });
+      }
+
+      return;
     }
+
+    res.writeHead(200, {
+      'Content-Length': fileSize,
+      'Content-Type': 'video/mp4'
+    });
+
+    fs.createReadStream(video.path).pipe(res);
+
+    const firstSegmentEnd = Math.min(FIXED_STREAM_SEGMENT_SIZE - 1, fileSize - 1);
+    videoCache.cacheSegmentFromFile(
+      video.id,
+      0,
+      video.path,
+      0,
+      firstSegmentEnd,
+      {
+        namespace: 'stream',
+        quality: 'fixed_2mb'
+      }
+    ).catch((cacheError) => {
+      console.error('Error caching first stream segment:', cacheError);
+    });
+
+    return;
   } catch (error) {
     console.error(`Error streaming video ${req.params.id}:`, error);
-    res.status(500).json({ error: 'Failed to stream video' });
+    return res.status(500).json({ error: 'Failed to stream video' });
   }
 });
 
-// Serve previews with caching headers (Moved before checkAuth)
-app.use(basePath + '/previews', express.static(path.join(__dirname, 'public', 'previews'), {
-  maxAge: staticCacheDuration
-}));
-
-// Serve thumbnails with caching headers (Moved before checkAuth)
-app.use(basePath + '/thumbnails', express.static(path.join(__dirname, 'public', 'thumbnails'), {
-  maxAge: staticCacheDuration
-}));
-
-// Serve API config (Moved before checkAuth)
-app.get(basePath + '/api/config', (req, res) => {
-  res.json({
-    vodsName: process.env.VODS_NAME || 'VODlibrary' // Provide VODS_NAME from env
-  });
+app.get(basePath + '/', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-// Preview API endpoints (before auth to allow public access for hover previews)
-app.get(basePath + '/api/videos/:id/preview-info', async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    const video = await getVideoById(db, req.params.id);
-    
-    if (!video) {
-      return res.status(404).json({ error: 'Video not found' });
-    }
-    
-    const previewInfo = {
-      hasPreview: !!video.preview_clips,
-      status: video.preview_generation_status || 'pending',
-      clips: video.preview_clips ? JSON.parse(video.preview_clips).clips : []
-    };
-    
-    res.json(previewInfo);
-  } catch (error) {
-    console.error(`Error getting preview info for video ${req.params.id}:`, error);
-    res.status(500).json({ error: 'Failed to get preview info' });
-  }
-});
+app.use(basePath, express.static(publicDir));
 
-app.get(basePath + '/api/videos/:id/preview/:timestamp?', async (req, res) => {
-  try {
-    const db = req.app.locals.db;
-    const videoId = req.params.id;
-    const timestamp = parseInt(req.params.timestamp || '10', 10);
-    
-    const video = await getVideoById(db, videoId);
-    if (!video) {
-      return res.status(404).json({ error: 'Video not found' });
-    }
-    
-    // Parse preview clips JSON
-    const previewClips = video.preview_clips ? JSON.parse(video.preview_clips) : null;
-    
-    if (!previewClips || !previewClips.clips) {
-      return res.status(404).json({ error: 'No preview clips available' });
-    }
-    
-    // Find matching preview clip
-    const clip = previewClips.clips.find(c => c.timestamp === timestamp);
-    if (!clip) {
-      return res.status(404).json({ error: 'Preview clip not found' });
-    }
-    
-    // Serve preview file with caching headers
-    const previewPath = path.join(__dirname, 'public', clip.path);
-    
-    if (!fs.existsSync(previewPath)) {
-      return res.status(404).json({ error: 'Preview file not found' });
-    }
-    
-    const stat = fs.statSync(previewPath);
-    
-    // CDN integration
-    if (cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
-      const cdnUrl = cdnManager.getCdnUrl(clip.path, 'preview');
-      return res.redirect(cdnUrl);
-    }
-    
-    // Set aggressive caching for preview clips
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // 24 hours
-    res.setHeader('Content-Length', stat.size);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    
-    const stream = fs.createReadStream(previewPath);
-    stream.pipe(res);
-    
-  } catch (error) {
-    console.error(`Error serving preview for video ${req.params.id}:`, error);
-    res.status(500).json({ error: 'Failed to serve preview' });
-  }
-});
-
-// Apply authentication middleware (protects routes below this)
-app.use(checkAuth);
-
-// Serve main index page (protected)
-app.get(basePath + '/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
-
-// Serve the rest of the public directory (Moved after checkAuth)
-app.use(basePath, express.static(path.join(__dirname, 'public')));
-
-// API routes (protected by checkAuth middleware applied above)
 const apiRoutes = require('./routes/api');
 app.use(basePath + '/api', apiRoutes);
 
-// --- End Routes & Middleware Order ---
+function getLibraryPaths() {
+  const raw = process.env.VIDEO_LIBRARY;
+  if (!raw || !raw.trim()) {
+    return [];
+  }
+
+  return raw
+    .split(',')
+    .map((libraryPath) => libraryPath.trim())
+    .filter(Boolean);
+}
+
+function createWatcherQueue({ concurrency = 2, debounceMs = 500 } = {}) {
+  const queue = [];
+  const pendingTimers = new Map();
+  let active = 0;
+
+  const runNext = () => {
+    while (active < concurrency && queue.length > 0) {
+      const task = queue.shift();
+      active += 1;
+
+      Promise.resolve()
+        .then(task)
+        .catch((error) => {
+          console.error('Watcher task failed:', error);
+        })
+        .finally(() => {
+          active -= 1;
+          runNext();
+        });
+    }
+  };
+
+  const schedule = (key, task) => {
+    const existing = pendingTimers.get(key);
+    if (existing) {
+      clearTimeout(existing);
+    }
+
+    const timer = setTimeout(() => {
+      pendingTimers.delete(key);
+      queue.push(task);
+      runNext();
+    }, debounceMs);
+
+    pendingTimers.set(key, timer);
+  };
+
+  const shutdown = () => {
+    for (const timer of pendingTimers.values()) {
+      clearTimeout(timer);
+    }
+    pendingTimers.clear();
+    queue.length = 0;
+  };
+
+  return {
+    schedule,
+    shutdown,
+    getDepth: () => queue.length + pendingTimers.size,
+    getActive: () => active
+  };
+}
+
+function setupLibraryWatcher(db) {
+  const libraryPaths = getLibraryPaths();
+  if (libraryPaths.length === 0) {
+    console.warn('VIDEO_LIBRARY environment variable not set or empty. File watcher not started.');
+    return null;
+  }
+
+  const watcherConcurrency = parseInt(process.env.WATCHER_CONCURRENCY || '2', 10);
+  const watcherDebounceMs = parseInt(process.env.WATCHER_DEBOUNCE_MS || '500', 10);
+  const watcherQueue = createWatcherQueue({
+    concurrency: Math.max(1, watcherConcurrency),
+    debounceMs: Math.max(0, watcherDebounceMs)
+  });
+
+  const watcher = chokidar.watch(libraryPaths, {
+    ignored: /(^|[\/\\])\../,
+    persistent: true,
+    ignoreInitial: true,
+    awaitWriteFinish: {
+      stabilityThreshold: 2000,
+      pollInterval: 100
+    }
+  });
+
+  watcher
+    .on('add', (filePath) => {
+      if (!isVideoFile(filePath)) {
+        return;
+      }
+
+      watcherQueue.schedule(filePath, async () => {
+        await processVideoFile(db, filePath);
+        const newVideo = await getVideoByPath(db, filePath);
+        if (newVideo) {
+          sendSseUpdate({ type: 'add', video: newVideo });
+        }
+      });
+    })
+    .on('unlink', (filePath) => {
+      if (!isVideoFile(filePath)) {
+        return;
+      }
+
+      watcherQueue.schedule(filePath, async () => {
+        const videoToRemove = await getVideoByPath(db, filePath);
+        if (!videoToRemove) {
+          return;
+        }
+
+        await deleteVideo(db, videoToRemove.id);
+        sendSseUpdate({ type: 'delete', videoId: videoToRemove.id });
+      });
+    })
+    .on('error', (error) => {
+      console.error(`Watcher error: ${error}`);
+    });
+
+  console.log(`File watcher is running for: ${libraryPaths.join(', ')}`);
+
+  return {
+    watcher,
+    queue: watcherQueue
+  };
+}
 
 async function startServer() {
   try {
     const db = await initializeDatabase();
 
-    // Make db and SSE functions available to routes
     app.locals.db = db;
-    app.locals.sseClients = sseClients; // Make clients available
-    app.locals.sendSseUpdate = sendSseUpdate; // Make send function available
+    app.locals.sseClients = sseClients;
+    app.locals.sendSseUpdate = sendSseUpdate;
+    app.locals.playerTemplate = null;
 
-    console.log('Performing initial library scan...');
-    await scanLibrary(db); // Initial scan on startup
-
-    // --- Chokidar File Watcher Setup ---
-    const libraryPaths = process.env.VIDEO_LIBRARY.split(',').map(p => p.trim());
-    if (libraryPaths.length > 0 && libraryPaths[0]) { // Check if paths are defined
-      console.log(`Initializing file watcher for: ${libraryPaths.join(', ')}`);
-      const watcher = chokidar.watch(libraryPaths, {
-        ignored: /(^|[\/\\])\../, // ignore dotfiles
-        persistent: true,
-        ignoreInitial: true, // Don't trigger 'add' events for existing files on startup
-        awaitWriteFinish: { // Helps avoid triggering events before file is fully written
-          stabilityThreshold: 2000,
-          pollInterval: 100
-        }
-      });
-
-      watcher
-        .on('add', async filePath => {
-          console.log(`Watcher: File added - ${filePath}`);
-          if (isVideoFile(filePath)) {
-            try {
-              // Process the new video (adds to DB, generates thumbnail)
-              await processVideoFile(db, filePath);
-              // Fetch the newly added video data to send to clients
-              const newVideo = await getVideoByPath(db, filePath);
-              if (newVideo) {
-                sendSseUpdate({ type: 'add', video: newVideo });
-              } else {
-                 console.error(`Watcher: Could not retrieve new video data after adding: ${filePath}`);
-              }
-            } catch (error) {
-              console.error(`Watcher: Error processing added file ${filePath}:`, error);
-            }
-          }
-        })
-        .on('unlink', async filePath => {
-          console.log(`Watcher: File removed - ${filePath}`);
-          if (isVideoFile(filePath)) {
-            try {
-              // Find the video in the DB by its path
-              const videoToRemove = await getVideoByPath(db, filePath);
-              if (videoToRemove) {
-                await deleteVideo(db, videoToRemove.id);
-                console.log(`Watcher: Removed video from DB (ID: ${videoToRemove.id})`);
-                sendSseUpdate({ type: 'delete', videoId: videoToRemove.id });
-                // Optionally: Clean up thumbnails/previews if needed
-                // const thumbPath = path.join(__dirname, 'public', videoToRemove.thumbnail_path);
-                // if (fs.existsSync(thumbPath)) fs.unlinkSync(thumbPath);
-              } else {
-                console.log(`Watcher: File removed, but not found in DB: ${filePath}`);
-              }
-            } catch (error) {
-              console.error(`Watcher: Error processing removed file ${filePath}:`, error);
-            }
-          }
-        })
-        .on('error', error => console.error(`Watcher error: ${error}`));
-
-      console.log('File watcher is running.');
-    } else {
-      console.warn('VIDEO_LIBRARY environment variable not set or empty. File watcher not started.');
+    try {
+      app.locals.playerTemplate = await fs.promises.readFile(path.join(publicDir, 'player.html'), 'utf8');
+    } catch (templateError) {
+      console.warn('Could not preload player template, using lazy load fallback.', templateError.message);
     }
-    // --- End Chokidar Setup ---
 
-    app.listen(port, '0.0.0.0', () => {
-      console.log(`Video server running at:`);
+    const watcherState = setupLibraryWatcher(db);
+    app.locals.watcherState = watcherState;
+
+    const server = app.listen(port, '0.0.0.0', () => {
+      console.log('Video server running at:');
       console.log(`- Local: http://localhost:${port}${basePath}`);
       console.log(`- Public: http://${publicIp}:${port}${basePath}`);
-      
+
       if (cdnEnabled) {
         console.log(`- CDN enabled with provider: ${cdnProvider}`);
         if (cdnBaseUrl) {
           console.log(`- CDN base URL: ${cdnBaseUrl}`);
         }
       }
+
+      // Non-blocking startup scan.
+      scanLibrary(db).catch((scanError) => {
+        console.error('Background startup scan failed:', scanError);
+      });
     });
 
+    return server;
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
+    return null;
   }
 }
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  startServer,
+  checkAuth,
+  createWatcherQueue,
+  getLibraryPaths,
+  sendSseUpdate
+};

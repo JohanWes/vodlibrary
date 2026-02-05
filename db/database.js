@@ -104,9 +104,22 @@ async function initializeDatabase() {
  * Get videos with pagination, optional search, and sorting
  */
 function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort = 'date_added_desc') {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const offset = (page - 1) * limit;
-    let query = 'SELECT * FROM videos';
+    const listColumns = [
+      'id',
+      'title',
+      'path',
+      'duration',
+      'width',
+      'height',
+      'added_date',
+      'thumbnail_path',
+      'preview_generation_status',
+      'preview_generation_date'
+    ].join(', ');
+
+    let query = `SELECT ${listColumns} FROM videos`;
     let countQuery = 'SELECT COUNT(*) as totalCount FROM videos';
     const params = [];
     const countParams = [];
@@ -119,8 +132,7 @@ function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort =
       countParams.push(searchPattern);
     }
 
-    // Determine ORDER BY clause based on sort parameter
-    let orderByClause = 'ORDER BY added_date DESC'; // Default sort
+    let orderByClause = 'ORDER BY added_date DESC';
     switch (sort) {
       case 'title_asc':
         orderByClause = 'ORDER BY title COLLATE NOCASE ASC';
@@ -132,38 +144,28 @@ function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort =
         orderByClause = 'ORDER BY added_date ASC';
         break;
       case 'date_added_desc':
+      default:
         orderByClause = 'ORDER BY added_date DESC';
         break;
-      // Add more cases for other sorting options if needed
     }
 
     query += ` ${orderByClause} LIMIT ? OFFSET ?`;
     params.push(limit, offset);
 
-    try {
-      // Get total count first
-      const countResult = await new Promise((resolveCount, rejectCount) => {
-        db.get(countQuery, countParams, (err, row) => {
-          if (err) {
-            rejectCount(err);
-          } else {
-            resolveCount(row);
-          }
-        });
-      });
-      const totalCount = countResult.totalCount;
+    db.get(countQuery, countParams, (countErr, countRow) => {
+      if (countErr) {
+        reject(countErr);
+        return;
+      }
 
-      // Then get the paginated results
-      db.all(query, params, (err, rows) => {
-        if (err) {
-          reject(err);
+      db.all(query, params, (listErr, rows) => {
+        if (listErr) {
+          reject(listErr);
           return;
         }
-        resolve({ videos: rows, totalCount });
+        resolve({ videos: rows, totalCount: countRow.totalCount });
       });
-    } catch (err) {
-      reject(err);
-    }
+    });
   });
 }
 

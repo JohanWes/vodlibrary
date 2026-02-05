@@ -1266,6 +1266,35 @@ document.addEventListener('DOMContentLoaded', async () => {
       const overlayVideo = document.getElementById('overlay-video-player');
       overlayVideo.src = `/api/videos/${videoId}/stream`;
 
+      const removeLoadingOverlay = () => {
+        if (loadingOverlay.parentNode) {
+          loadingOverlay.remove();
+        }
+      };
+
+      const onOverlayReady = () => {
+        cleanupOverlayLoadingListeners();
+        removeLoadingOverlay();
+      };
+
+      const cleanupOverlayLoadingListeners = () => {
+        clearTimeout(overlayLoadingFallbackTimeout);
+        overlayVideo.removeEventListener('playing', onOverlayReady);
+        overlayVideo.removeEventListener('canplay', onOverlayReady);
+        overlayVideo.removeEventListener('error', onOverlayReady);
+      };
+
+      // Hide loader when playback is actually ready, not on an arbitrary timer.
+      overlayVideo.addEventListener('playing', onOverlayReady, { once: true });
+      overlayVideo.addEventListener('canplay', onOverlayReady, { once: true });
+      overlayVideo.addEventListener('error', onOverlayReady, { once: true });
+
+      // Safety fallback in case media events are delayed/missed.
+      const overlayLoadingFallbackTimeout = setTimeout(() => {
+        cleanupOverlayLoadingListeners();
+        removeLoadingOverlay();
+      }, 8000);
+
       // Initialize Plyr
       initializeOverlayPlayer(video);
 
@@ -1282,13 +1311,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       // Preload additional segments (conditional based on performance)
       preloadOverlaySegments(videoId, overlayVideo);
-      
-      // Remove loading overlay
-      setTimeout(() => {
-        if (loadingOverlay.parentNode) {
-          loadingOverlay.remove();
-        }
-      }, 500);
       
     } catch (error) {
       console.error('Error opening video overlay:', error);
