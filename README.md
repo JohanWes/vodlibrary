@@ -1,67 +1,74 @@
 # VODlibrary
 
-A simple video sharing/viewing software similar to Plex. This application scans a video library, creates thumbnails, and allows you to view and share videos with performance optimizations like server-side caching and CDN integration.
+A self-hosted video library for browsing, streaming, and sharing video clips. Scans directories for video files, generates thumbnails and hover preview clips, and provides a web interface for viewing.
 
 ## Features
 
-- Video library scanning
-- Multiple video directory support
-- Thumbnail generation
-- Video streaming with adaptive quality
-- Server-side caching for frequently accessed videos
-- CDN integration for faster global delivery
-- Sharing capabilities
-- Responsive web interface
+- Multi-directory video library scanning with file watcher for auto-detection
+- Thumbnail and hover preview clip generation (AV1/H.264 via FFmpeg)
+- Video streaming with segment-based caching
+- Death timestamp markers on the player timeline (from WarcraftRecorder metadata)
+- Share links with optional authentication
+- CDN integration
+- LLM-powered search (via OpenRouter)
 
-## Performance Optimizations
+## Setup
 
-### Server-Side Caching
+### Prerequisites
 
-VODlibrary now includes server-side caching to improve performance and reduce disk I/O:
+- Node.js
+- FFmpeg and ffprobe in your PATH
 
-- Frequently accessed video segments are cached in memory
-- Intelligent caching based on video popularity
-- Configurable cache size and TTL
-- Automatic cache cleanup using LRU (Least Recently Used) strategy
+### Installation
 
-### CDN Integration
+```bash
+git clone https://github.com/JohanWes/vodlibrary.git
+cd vodlibrary
+npm install
+cp .env.example .env  # Edit with your settings
+npm start
+```
 
-For improved global delivery, VODlibrary supports integration with Content Delivery Networks:
+### Linux (KDE Autostart)
 
-- Support for multiple CDN providers (Cloudflare, BunnyCDN, KeyCDN, or custom)
-- Configurable CDN settings
-- Optional signed URLs for secure access
-- Automatic redirection to CDN for video content
+The `scripts/start_server.sh` script can be added to KDE autostart to run on login.
 
-## Running as a Windows Service (Optional)
+### Windows Service
 
-This application can be installed as a Windows service to run automatically in the background when your computer starts.
+```bash
+# Install (run as Administrator)
+npm run install-service
 
-**Prerequisites:**
-- Node.js installed and added to your system PATH.
-- **FFmpeg**: Required for video processing (thumbnail generation, video dimension extraction). Download from [ffmpeg.org](https://ffmpeg.org/download.html) and ensure `ffmpeg` and `ffprobe` executables are in your system's PATH. On Windows, you can install via Chocolatey: `choco install ffmpeg`.
+# Uninstall
+npm run uninstall-service
+```
 
-**Installation:**
-1. Open a Command Prompt or PowerShell **as Administrator**.
-2. Navigate to the project directory (`cd path\to\VODlibrary`).
-3. Run the command: `npm run install-service`
+Manage via `services.msc` or `sc start/stop VODlibraryService`.
 
-This will register the service named "VODlibraryService" and attempt to start it.
+## Configuration (.env)
 
-**Uninstallation:**
-1. Open a Command Prompt or PowerShell **as Administrator**.
-2. Navigate to the project directory.
-3. Run the command: `npm run uninstall-service`
-
-**Managing the Service:**
-- Use the Windows Services application (`services.msc`) to start, stop, or configure the "VODlibraryService".
-- Alternatively, use command line (as Administrator):
-    - `sc start VODlibraryService`
-    - `sc stop VODlibraryService`
-    - `sc query VODlibraryService`
-
-**Logging:**
-- Service logs (output from `console.log`/`console.error`) can be found in the Windows Event Viewer under "Windows Logs" > "Application" (Source: "VODlibraryService").
+| Variable | Description | Default |
+|---|---|---|
+| `PORT` | Server port | `8005` |
+| `HOST_IP` | Bind address | `localhost` |
+| `BASE_PATH` | URL prefix (for reverse proxy) | `` |
+| `VIDEO_LIBRARY` | Comma-separated list of video directories | |
+| `THUMBNAIL_TIME` | Seconds into video to capture thumbnail | `5` |
+| `THUMBNAIL_CACHE_DIR` | Where to store generated thumbnails | `./public/thumbnails` |
+| `PREVIEW_DURATION` | Duration of hover preview clips (seconds) | `10` |
+| `PREVIEWS_CACHE_DIR` | Where to store generated preview clips | `./public/previews` |
+| `PREVIEW_QUALITY` | Preview quality preset: `low`, `medium`, `high` | `high` |
+| `DB_DIR` | Database directory | `./data/db` |
+| `VODS_NAME` | Display name for the site | `VODlibrary` |
+| `ENABLE_AUTH` | Enable login page | `false` |
+| `SESSION_KEY` | Password for authentication and share links | |
+| `SHARE_BASE_URL` | Public URL for share links (e.g. `https://example.com`) | |
+| `CACHE_MAX_SIZE` | Server-side video cache size in MB | `500` |
+| `CACHE_TTL` | Cache TTL in seconds | `3600` |
+| `CDN_ENABLED` | Enable CDN integration | `false` |
+| `ADVANCED_SEARCH_ENABLED` | Enable LLM-powered search | `false` |
+| `OPENROUTER_API_KEY` | OpenRouter API key for LLM search | |
+| `OPENROUTER_MODEL` | Model to use for LLM search | `deepseek/deepseek-r1-0528` |
 
 ## License
 
