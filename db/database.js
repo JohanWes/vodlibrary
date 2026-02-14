@@ -115,6 +115,7 @@ function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort =
       'height',
       'added_date',
       'thumbnail_path',
+      'death_timestamps',
       'preview_generation_status',
       'preview_generation_date'
     ].join(', ');

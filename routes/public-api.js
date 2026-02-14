@@ -96,12 +96,26 @@ router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
     }
 
     const normalizedClipPath = normalizePublicAssetPath(clip.path);
-    const previewPath = path.join(__dirname, '..', 'public', normalizedClipPath);
+    const publicPreviewPath = path.join(__dirname, '..', 'public', normalizedClipPath);
+    const configuredPreviewDir = process.env.PREVIEWS_CACHE_DIR;
+    const dataPreviewPath = configuredPreviewDir
+      ? path.join(configuredPreviewDir, path.basename(normalizedClipPath))
+      : null;
 
+    let previewPath = publicPreviewPath;
     try {
-      await fs.promises.access(previewPath, fs.constants.R_OK);
+      await fs.promises.access(publicPreviewPath, fs.constants.R_OK);
     } catch (_error) {
-      return res.status(404).json({ error: 'Preview file not found' });
+      if (dataPreviewPath) {
+        try {
+          await fs.promises.access(dataPreviewPath, fs.constants.R_OK);
+          previewPath = dataPreviewPath;
+        } catch (_error2) {
+          return res.status(404).json({ error: 'Preview file not found' });
+        }
+      } else {
+        return res.status(404).json({ error: 'Preview file not found' });
+      }
     }
 
     const stat = await fs.promises.stat(previewPath);

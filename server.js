@@ -159,9 +159,22 @@ const staticCacheDuration = 86400 * 1000;
 app.use(basePath + '/previews', express.static(path.join(publicDir, 'previews'), {
   maxAge: staticCacheDuration
 }));
+const configuredPreviewDir = process.env.PREVIEWS_CACHE_DIR;
+if (configuredPreviewDir && path.resolve(configuredPreviewDir) !== path.resolve(path.join(publicDir, 'previews'))) {
+  app.use(basePath + '/previews', express.static(configuredPreviewDir, {
+    maxAge: staticCacheDuration
+  }));
+}
 app.use(basePath + '/thumbnails', express.static(path.join(publicDir, 'thumbnails'), {
   maxAge: staticCacheDuration
 }));
+// Also serve from THUMBNAIL_CACHE_DIR if configured separately from public/thumbnails
+const configuredThumbnailDir = process.env.THUMBNAIL_CACHE_DIR;
+if (configuredThumbnailDir && path.resolve(configuredThumbnailDir) !== path.resolve(path.join(publicDir, 'thumbnails'))) {
+  app.use(basePath + '/thumbnails', express.static(configuredThumbnailDir, {
+    maxAge: staticCacheDuration
+  }));
+}
 
 // Login/public assets
 app.get(basePath + '/login.html', (_req, res) => {
