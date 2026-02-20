@@ -5,9 +5,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Add utility styles
   addUtilStyles();
   
-  // Apply reduced-effects mode before heavy DOM work
-  applyLowEffectsModeIfNeeded();
-  
   // Initialize video preview manager
   let videoPreviewManager;
   try {
@@ -81,8 +78,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   let pendingPage = null; // Track in-flight pagination requests
   let infiniteScrollObserver = null;
   let preloadObserver = null;
-  let overlayOpenTimer = null;
-  let overlayCloseTimer = null;
+  let overlayOpenTransitionCleanup = null;
+  let overlayCloseTransitionCleanup = null;
+  let overlayTransitionNonce = 0;
   const parsedCardTiltMax = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--card-hover-rotate-max'));
   const cardTiltMaxDegrees = Number.isFinite(parsedCardTiltMax) ? parsedCardTiltMax : 5;
   let activeTiltCard = null;
@@ -96,7 +94,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let overlayCurrentVideoId = null; // Current video ID in overlay
   let overlayVideoMetadata = null; // Current video metadata
   let overlayBaseShareUrl = null; // Base share URL for current video
-  const OVERLAY_OPEN_TRANSITION_MS = 240;
+  const OVERLAY_OPEN_TRANSITION_MS = 220;
   const OVERLAY_CLOSE_TRANSITION_MS = 180;
 
   /**
@@ -125,9 +123,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function canUseInteractiveCardTilt() {
-    if (document.body.classList.contains('low-effects')) {
-      return false;
-    }
     return !isCoarsePointerDevice();
   }
 
@@ -265,117 +260,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
   
-
-  /**
-   * Toggle low-effects mode based on user preference and media queries
-   */
-  function applyLowEffectsModeIfNeeded() {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const effectsConfig = window.VideoUIEffects || {};
-    window.VideoUIEffects = effectsConfig;
-
-    const supportsMatchMedia = typeof window.matchMedia === 'function';
-    const reduceMotionQuery = supportsMatchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
-    let reduceTransparencyQuery = null;
-    if (supportsMatchMedia) {
-      try {
-        reduceTransparencyQuery = window.matchMedia('(prefers-reduced-transparency: reduce)');
-      } catch (error) {
-        reduceTransparencyQuery = null;
-      }
-    }
-
-    const safeGetItem = (key) => {
-      try {
-        return window.localStorage.getItem(key);
-      } catch (storageError) {
-        return null;
-      }
-    };
-
-    const safeSetItem = (key, value) => {
-      try {
-        if (typeof value === 'string') {
-          window.localStorage.setItem(key, value);
-        } else {
-          window.localStorage.removeItem(key);
-        }
-      } catch (storageError) {
-        // Ignore storage failures (private mode, etc.)
-      }
-    };
-
-    const updateLowEffectsClass = () => {
-      const storedPreference = safeGetItem('vod-low-effects');
-      let shouldEnable = false;
-
-      if (storedPreference === 'true') {
-        shouldEnable = true;
-      } else if (storedPreference === 'false') {
-        shouldEnable = false;
-      } else {
-        // Auto-enable when system preferences or device/network constraints suggest lower effects.
-        const reduceMotion = reduceMotionQuery && reduceMotionQuery.matches;
-        const reduceTransparency = reduceTransparencyQuery && reduceTransparencyQuery.matches;
-        const hasNavigator = typeof navigator !== 'undefined';
-        const lowMemoryDevice = hasNavigator && typeof navigator.deviceMemory === 'number' && navigator.deviceMemory <= 4;
-        const constrainedConnection = hasNavigator &&
-          navigator.connection &&
-          (navigator.connection.saveData || ['slow-2g', '2g'].includes(navigator.connection.effectiveType));
-        shouldEnable = Boolean(
-          reduceMotion ||
-          reduceTransparency ||
-          effectsConfig.forceLowEffects ||
-          (lowMemoryDevice && constrainedConnection)
-        );
-      }
-
-      document.body.classList.toggle('low-effects', shouldEnable);
-      effectsConfig.lowEffectsEnabled = shouldEnable;
-    };
-
-    /**
-     * Enable low effects mode programmatically
-     */
-    const enableLowEffectsMode = () => {
-      const effectsConfig = window.VideoUIEffects || {};
-      if (!effectsConfig.lowEffectsEnabled) {
-        safeSetItem('vod-low-effects', 'true');
-        document.body.classList.add('low-effects');
-        effectsConfig.lowEffectsEnabled = true;
-        console.log('[Performance] Low effects mode enabled for better performance');
-      }
-    };
-
-    // Make enableLowEffectsMode globally accessible
-    window.enableLowEffectsMode = enableLowEffectsMode;
-
-    const attachPreferenceListener = (query) => {
-      if (!query) return;
-      const listener = () => updateLowEffectsClass();
-      if (typeof query.addEventListener === 'function') {
-        query.addEventListener('change', listener);
-      } else if (typeof query.addListener === 'function') {
-        query.addListener(listener);
-      }
-    };
-
-    effectsConfig.setLowEffectsMode = (value) => {
-      if (typeof value === 'boolean') {
-        safeSetItem('vod-low-effects', value ? 'true' : 'false');
-      } else {
-        safeSetItem('vod-low-effects');
-      }
-      updateLowEffectsClass();
-    };
-
-    updateLowEffectsClass();
-    attachPreferenceListener(reduceMotionQuery);
-    attachPreferenceListener(reduceTransparencyQuery);
-  }
 
   /**
    * Delegate click handling within the videos grid
@@ -827,7 +711,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>
       `;
       
-      if (animate && !document.body.classList.contains('low-effects')) {
+      if (animate) {
         videoCard.classList.add('card-enter');
         videoCard.addEventListener('animationend', () => {
           videoCard.classList.remove('card-enter');
@@ -959,13 +843,9 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }, 300); // 300ms debounce delay
 
-    const shouldAttachHoverPreload = !document.body.classList.contains('low-effects');
-
     videoCards.forEach(card => {
       const videoId = card.dataset.id;
-      if (shouldAttachHoverPreload) {
-        card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
-      }
+      card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
       preloadObserver.observe(card);
       card.classList.add('preload-observed'); // Mark card as observed
     });
@@ -1181,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Format duration if needed (assuming utils are loaded)
     newVideo.duration_formatted = window.VideoUtils.formatDuration(newVideo.duration);
     const videoCard = createVideoCardElement(newVideo, {
-      animate: !document.body.classList.contains('low-effects'),
+      animate: true,
       highPriorityThumbnail: false
     });
     videosGrid.prepend(videoCard); // Add to the beginning of the grid
@@ -1299,16 +1179,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.log(`[Performance] Overlay FPS - Current: ${fps}, Avg: ${avgFPS}, Min: ${monitor.minFPS}, Max: ${monitor.maxFPS}, Below 30fps: ${monitor.belowThreshold}/${monitor.sampleCount} samples`);
         }
 
-        // Auto-enable low effects if performance is consistently poor
-        if (monitor.sampleCount >= 3 && monitor.belowThreshold / monitor.sampleCount >= 0.6) {
-          const effectsConfig = window.VideoUIEffects || {};
-          if (!effectsConfig.lowEffectsEnabled) {
-            console.warn('[Performance] Poor overlay performance detected, auto-enabling low effects mode');
-            if (window.enableLowEffectsMode) {
-              window.enableLowEffectsMode();
-            }
-          }
-        }
       }
 
       // Continue monitoring
@@ -1346,10 +1216,62 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function shouldUseReducedMotion() {
-    if (document.body.classList.contains('low-effects')) {
-      return true;
-    }
     return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  function beginOverlayTransition() {
+    overlayTransitionNonce += 1;
+    return overlayTransitionNonce;
+  }
+
+  function isActiveOverlayTransition(nonce) {
+    return nonce === overlayTransitionNonce;
+  }
+
+  function clearOverlayOpenTransition() {
+    if (overlayOpenTransitionCleanup) {
+      overlayOpenTransitionCleanup();
+      overlayOpenTransitionCleanup = null;
+    }
+  }
+
+  function clearOverlayCloseTransition() {
+    if (overlayCloseTransitionCleanup) {
+      overlayCloseTransitionCleanup();
+      overlayCloseTransitionCleanup = null;
+    }
+  }
+
+  function watchOverlayContainerTransition(overlay, timeoutMs, onComplete) {
+    const overlayContainer = overlay.querySelector('.video-overlay-container');
+    if (!overlayContainer) {
+      onComplete();
+      return () => {};
+    }
+
+    let isFinished = false;
+    const finish = () => {
+      if (isFinished) return;
+      isFinished = true;
+      cleanup();
+      onComplete();
+    };
+
+    const handleTransitionEnd = (event) => {
+      if (event.target !== overlayContainer) return;
+      if (event.propertyName !== 'transform' && event.propertyName !== 'opacity') return;
+      finish();
+    };
+
+    overlayContainer.addEventListener('transitionend', handleTransitionEnd);
+    const timeoutId = setTimeout(finish, timeoutMs + 80);
+
+    const cleanup = () => {
+      overlayContainer.removeEventListener('transitionend', handleTransitionEnd);
+      clearTimeout(timeoutId);
+    };
+
+    return cleanup;
   }
 
   function resetOverlayTransformVariables(overlay) {
@@ -1389,15 +1311,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function showOverlayWithTransition(overlay, event) {
-    if (overlayOpenTimer) {
-      clearTimeout(overlayOpenTimer);
-      overlayOpenTimer = null;
-    }
-
-    if (overlayCloseTimer) {
-      clearTimeout(overlayCloseTimer);
-      overlayCloseTimer = null;
-    }
+    clearOverlayOpenTransition();
+    clearOverlayCloseTransition();
+    const transitionNonce = beginOverlayTransition();
 
     overlay.classList.remove('is-closing');
     setOverlayOriginFromEvent(overlay, event);
@@ -1407,23 +1323,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (!shouldUseReducedMotion()) {
       overlay.classList.add('is-opening');
-      overlayOpenTimer = setTimeout(() => {
-        overlayOpenTimer = null;
+      overlayOpenTransitionCleanup = watchOverlayContainerTransition(overlay, OVERLAY_OPEN_TRANSITION_MS, () => {
+        overlayOpenTransitionCleanup = null;
+        if (!isActiveOverlayTransition(transitionNonce)) return;
         overlay.classList.remove('is-opening');
         overlay.classList.remove('has-origin');
         resetOverlayTransformVariables(overlay);
-      }, OVERLAY_OPEN_TRANSITION_MS);
+      });
     } else {
       overlay.classList.remove('has-origin');
+      overlay.classList.remove('is-opening');
       resetOverlayTransformVariables(overlay);
     }
   }
 
   function finalizeOverlayClose(overlay, updateHistory) {
-    if (overlayOpenTimer) {
-      clearTimeout(overlayOpenTimer);
-      overlayOpenTimer = null;
-    }
+    beginOverlayTransition();
+    clearOverlayOpenTransition();
+    clearOverlayCloseTransition();
 
     overlay.classList.remove('visible');
     overlay.classList.remove('is-opening');
@@ -1586,19 +1503,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Stop FPS monitoring
     stopOverlayFPSMonitoring();
 
-    if (overlayCloseTimer) {
-      clearTimeout(overlayCloseTimer);
-      overlayCloseTimer = null;
-    }
+    clearOverlayOpenTransition();
+    clearOverlayCloseTransition();
+    const transitionNonce = beginOverlayTransition();
 
-    const animateClose = overlay.classList.contains('visible') && !shouldUseReducedMotion();
+    const animateClose = (overlay.classList.contains('visible') || overlay.classList.contains('is-opening')) && !shouldUseReducedMotion();
     if (animateClose) {
       overlay.classList.remove('visible');
+      overlay.classList.remove('is-opening');
+      overlay.classList.remove('has-origin');
+      resetOverlayTransformVariables(overlay);
       overlay.classList.add('is-closing');
-      overlayCloseTimer = setTimeout(() => {
-        overlayCloseTimer = null;
+      overlayCloseTransitionCleanup = watchOverlayContainerTransition(overlay, OVERLAY_CLOSE_TRANSITION_MS, () => {
+        overlayCloseTransitionCleanup = null;
+        if (!isActiveOverlayTransition(transitionNonce)) return;
         finalizeOverlayClose(overlay, updateHistory);
-      }, OVERLAY_CLOSE_TRANSITION_MS);
+      });
     } else {
       finalizeOverlayClose(overlay, updateHistory);
     }
@@ -1820,13 +1740,6 @@ document.addEventListener('DOMContentLoaded', async () => {
    */
   async function preloadOverlaySegments(videoId, videoElement = null) {
     try {
-      // Skip preloading if low-effects mode is enabled (indicates constrained system)
-      const effectsConfig = window.VideoUIEffects || {};
-      if (effectsConfig.lowEffectsEnabled) {
-        console.log('[Performance] Skipping segment preloading - low effects mode enabled');
-        return;
-      }
-
       // Skip preloading if FPS is poor (system under stress)
       if (overlayFPSMonitor && overlayFPSMonitor.sampleCount >= 2) {
         const avgFPS = overlayFPSMonitor.totalFPS / overlayFPSMonitor.sampleCount;

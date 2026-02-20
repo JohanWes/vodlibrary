@@ -92,6 +92,7 @@
 
 html {
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 body {
@@ -118,109 +119,6 @@ h2,
 #overlay-video-title {
   font-family: var(--font-display);
   letter-spacing: -0.018em;
-}
-
-body.low-effects * {
-  transition-duration: var(--transition-fast);
-}
-
-body.low-effects header,
-body.low-effects footer,
-body.low-effects .search-container,
-body.low-effects .search-input,
-body.low-effects .videos-header,
-body.low-effects .video-overlay-container,
-body.low-effects .video-overlay,
-body.low-effects .video-overlay-backdrop,
-body.low-effects .scan-status,
-body.low-effects .share-popover {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-
-body.low-effects header {
-  background: var(--bg-secondary);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
-  border-bottom: 1px solid var(--border-light);
-}
-
-body.low-effects footer {
-  background: var(--bg-tertiary);
-  box-shadow: none;
-}
-
-body.low-effects .video-overlay-container {
-  background: var(--bg-secondary);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-}
-
-body.low-effects .video-overlay {
-  background: rgba(0, 0, 0, 0.85);
-}
-
-body.low-effects .video-overlay.visible ~ header,
-body.low-effects .video-overlay.visible ~ main,
-body.low-effects .video-overlay.visible ~ footer {
-  filter: none;
-}
-
-body.low-effects .video-card {
-  background: var(--bg-tertiary);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
-  transition: box-shadow var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
-  filter: none;
-  --card-rotate-x: 0deg;
-  --card-rotate-y: 0deg;
-  --card-lift: 0px;
-  --card-scale: 1;
-}
-
-body.low-effects .video-card::before {
-  opacity: 0;
-}
-
-body.low-effects .video-card::after {
-  display: none;
-}
-
-body.low-effects .video-card:hover {
-  --card-lift: -4px;
-  --card-scale: 1.02;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
-  border-color: var(--accent-color);
-}
-
-body.low-effects .video-card:focus-within {
-  --card-lift: -4px;
-  --card-scale: 1.02;
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.42);
-  border-color: var(--accent-color);
-}
-
-body.low-effects .video-card:hover::before,
-body.low-effects .video-card:focus-within::before {
-  opacity: 0.62;
-}
-
-body.low-effects .thumbnail {
-  transition: none;
-}
-
-body.low-effects .video-card:hover .thumbnail {
-  transform: none;
-}
-
-body.low-effects .duration-badge {
-  background-color: rgba(0, 0, 0, 0.85);
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-body.low-effects .card-enter {
-  animation: none !important;
-  opacity: 1 !important;
-  transform: none !important;
 }
 
 .container {
@@ -1872,39 +1770,52 @@ a:focus {
 
 /* Video Overlay Styles */
 .video-overlay {
+  --overlay-open-duration: 0.22s;
+  --overlay-close-duration: 0.18s;
+  --overlay-motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background: rgba(9, 11, 16, 0.62);
+  background: rgba(12, 17, 26, 0.5);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   z-index: 1000;
-  display: none;
+  display: flex;
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity var(--transition-normal);
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--overlay-close-duration) var(--overlay-motion-ease),
+    visibility 0s linear var(--overlay-close-duration);
   overflow: auto;
-  will-change: auto;
-  transform: translateZ(0);
-  contain: layout;
+  will-change: opacity;
 }
 
-.video-overlay.visible {
-  display: flex;
+.video-overlay.visible,
+.video-overlay.is-opening {
+  visibility: visible;
   opacity: 1;
+  pointer-events: auto;
+  transition:
+    opacity var(--overlay-open-duration) var(--overlay-motion-ease),
+    visibility 0s linear 0s;
 }
 
 .video-overlay.is-closing {
-  display: flex;
+  visibility: visible;
   opacity: 0;
   pointer-events: none;
+  transition:
+    opacity var(--overlay-close-duration) var(--overlay-motion-ease),
+    visibility 0s linear var(--overlay-close-duration);
 }
 
-/* Optimize will-change only during transitions */
-.video-overlay:not(.visible) {
+.video-overlay.is-opening,
+.video-overlay.is-closing {
   will-change: opacity;
 }
 
@@ -1912,7 +1823,8 @@ a:focus {
   will-change: auto;
 }
 
-.video-overlay:not(.visible) .video-overlay-container {
+.video-overlay.is-opening .video-overlay-container,
+.video-overlay.is-closing .video-overlay-container {
   will-change: opacity, transform;
 }
 
@@ -1942,8 +1854,10 @@ a:focus {
   position: relative;
   z-index: 2;
   opacity: 0;
-  transform: translateY(20px);
-  transition: opacity var(--transition-normal), transform var(--transition-normal);
+  transform: translateY(22px) scale(0.988);
+  transition:
+    opacity var(--overlay-open-duration) var(--overlay-motion-ease),
+    transform var(--overlay-open-duration) var(--overlay-motion-ease);
   overflow: hidden;
   will-change: auto;
   contain: layout style paint;
@@ -1951,21 +1865,21 @@ a:focus {
 
 .video-overlay.visible .video-overlay-container {
   opacity: 1;
-  transform: translateY(0);
+  transform: translateY(0) scale(1);
 }
 
 .video-overlay.is-opening.has-origin .video-overlay-container {
-  opacity: 0.72;
+  opacity: 0.82;
   transform: translate3d(
     var(--overlay-origin-translate-x, 0),
     var(--overlay-origin-translate-y, 0),
     0
-  ) scale(var(--overlay-origin-scale, 0.9));
+  ) scale(var(--overlay-origin-scale, 0.94));
 }
 
 .video-overlay.is-closing .video-overlay-container {
   opacity: 0;
-  transform: translateY(10px) scale(0.985);
+  transform: translateY(14px) scale(0.992);
 }
 
 /* Respect reduced motion preferences */
@@ -2025,9 +1939,9 @@ a:focus {
   overflow: hidden;
   position: relative;
   contain: layout style paint;
-  transform: translateZ(0) scale(0.985);
+  transform: scale(0.988);
   opacity: 0.9;
-  transition: transform 0.24s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.2s ease;
+  transition: transform var(--overlay-open-duration) var(--overlay-motion-ease), opacity 0.16s ease;
 }
 
 #overlay-video-player {
@@ -2039,17 +1953,17 @@ a:focus {
   display: block;
   opacity: 0;
   transform: scale(1.02);
-  transition: opacity 0.22s ease, transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity 0.16s ease, transform 0.18s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .video-overlay.visible .video-overlay-player-container {
-  transform: translateZ(0) scale(1);
+  transform: scale(1);
   opacity: 1;
 }
 
 .video-overlay.is-opening.has-origin .video-overlay-player-container {
-  transform: translateZ(0) scale(0.9);
-  opacity: 0.72;
+  transform: scale(0.93);
+  opacity: 0.8;
 }
 
 .video-overlay-player-container.is-video-ready #overlay-video-player,
@@ -2291,20 +2205,46 @@ a:focus {
   will-change: opacity, transform;
 }
 
-/* Animation for background blur */
-.video-overlay.visible ~ header,
-.video-overlay.visible ~ main,
-.video-overlay.visible ~ footer {
-  filter: blur(1px);
-  transition: filter var(--transition-fast);
-  will-change: filter;
-  contain: layout style paint;
+/* Keep chrome visible but softly subdued while overlay is open */
+header,
+main,
+footer {
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+
+body.overlay-open header,
+body.overlay-open main,
+body.overlay-open footer {
+  filter: blur(0.35px);
+  opacity: 0.985;
 }
 
 /* Body scroll lock when overlay is open */
 body.overlay-open {
-  overflow: hidden;
+  overflow-y: scroll;
+  overflow-x: hidden;
   height: 100vh;
+  scrollbar-color: rgba(195, 201, 211, 0.42) rgba(11, 14, 20, 0.5);
+}
+
+body.overlay-open::-webkit-scrollbar {
+  width: 12px;
+}
+
+body.overlay-open::-webkit-scrollbar-track {
+  background: rgba(11, 14, 20, 0.5);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+body.overlay-open::-webkit-scrollbar-thumb {
+  background: rgba(195, 201, 211, 0.36);
+  border-radius: 999px;
+  border: 2px solid rgba(11, 14, 20, 0.5);
+}
+
+body.overlay-open::-webkit-scrollbar-thumb:hover {
+  background: rgba(212, 160, 90, 0.56);
 }
 
 /* Focus trap styles */

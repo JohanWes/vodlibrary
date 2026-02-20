@@ -27,6 +27,9 @@ describe('Frontend stylesheet contract', () => {
     expect(css.includes('.video-loading-overlay')).toBe(true);
     expect(css.includes('.video-loading-spinner')).toBe(true);
     expect(css.includes('body.overlay-open')).toBe(true);
+    expect(css.includes('body.overlay-open header')).toBe(true);
+    expect(css.includes('body.overlay-open main')).toBe(true);
+    expect(css.includes('body.overlay-open footer')).toBe(true);
     expect(css.includes('.search-container.focused .search-input')).toBe(true);
   });
 
