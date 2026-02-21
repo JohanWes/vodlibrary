@@ -15,6 +15,7 @@ const mockCdnManager = {
 };
 
 const mockVideoCache = {
+  recordAccess: jest.fn(),
   getCachedSegment: jest.fn(),
   cacheSegmentFromFile: jest.fn().mockResolvedValue(true)
 };
@@ -167,6 +168,9 @@ describe('Public Preview API Endpoints', () => {
         .expect(206);
 
       expect(response.headers['content-length']).toBe('524288');
+      expect(mockVideoCache.recordAccess).toHaveBeenCalledWith('1', {
+        namespace: 'preview-segment'
+      });
       expect(mockVideoCache.getCachedSegment).toHaveBeenCalledWith('1', 0, {
         namespace: 'preview-segment',
         quality: 'low',

@@ -28,6 +28,20 @@ function debugLog(...args) {
   }
 }
 
+function sliceCanonicalSegmentForRange(cachedSegment, segmentStart, start, end) {
+  if (!Buffer.isBuffer(cachedSegment)) {
+    return null;
+  }
+
+  const offsetStart = start - segmentStart;
+  const offsetEndExclusive = (end - segmentStart) + 1;
+  if (offsetStart < 0 || offsetEndExclusive > cachedSegment.length || offsetStart >= offsetEndExclusive) {
+    return null;
+  }
+
+  return cachedSegment.subarray(offsetStart, offsetEndExclusive);
+}
+
 // Get port and IP from environment variables with fallbacks
 const port = process.env.PORT || 8005;
 const publicIp = process.env.HOST_IP || 'localhost';
@@ -344,6 +358,8 @@ app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
       return res.redirect(cdnUrl);
     }
 
+    videoCache.recordAccess(video.id, { namespace: 'stream' });
+
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
       const start = Number.parseInt(parts[0], 10);
@@ -365,9 +381,8 @@ app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
         endByte: segmentEnd
       };
 
-      const cachedSegment = isCanonicalSegment
-        ? videoCache.getCachedSegment(video.id, segmentNumber, cacheOptions)
-        : null;
+      const cachedSegment = videoCache.getCachedSegment(video.id, segmentNumber, cacheOptions);
+      const isSingleSegmentRange = start >= segmentStart && end <= segmentEnd;
 
       const chunkSize = (end - start) + 1;
       res.writeHead(206, {
@@ -377,8 +392,15 @@ app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
         'Content-Type': 'video/mp4'
       });
 
-      if (cachedSegment && cachedSegment.length === chunkSize) {
-        res.end(cachedSegment);
+      let responseChunk = null;
+      if (cachedSegment && isSingleSegmentRange) {
+        responseChunk = isCanonicalSegment
+          ? cachedSegment
+          : sliceCanonicalSegmentForRange(cachedSegment, segmentStart, start, end);
+      }
+
+      if (responseChunk && responseChunk.length === chunkSize) {
+        res.end(responseChunk);
         return;
       }
 
@@ -625,5 +647,6 @@ module.exports = {
   checkAuth,
   createWatcherQueue,
   getLibraryPaths,
-  sendSseUpdate
+  sendSseUpdate,
+  sliceCanonicalSegmentForRange
 };

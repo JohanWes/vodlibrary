@@ -169,6 +169,8 @@ router.get('/videos/:id/segments/:segmentNumber', async (req, res) => {
       return res.redirect(cdnUrl);
     }
 
+    videoCache.recordAccess(videoId, { namespace: 'preview-segment' });
+
     const chunkSize = (endByte - startByte) + 1;
     const cacheOptions = {
       namespace: 'preview-segment',

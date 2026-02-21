@@ -1,3 +1,7 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
 describe('Video Cache Module', () => {
   let cache;
 
@@ -110,5 +114,53 @@ describe('Video Cache Module', () => {
 
     expect(evicted).toBeNull();
     expect(retained).not.toBeNull();
+  });
+
+  test('records request access by namespace', () => {
+    cache.recordAccess('1', { namespace: 'stream' });
+    cache.recordAccess('1', { namespace: 'stream' });
+    cache.recordAccess('1', { namespace: 'preview-segment' });
+
+    const stats = cache.getCacheStats();
+    expect(stats.videoAccess['1:stream']).toBe(2);
+    expect(stats.videoAccess['1:preview-segment']).toBe(1);
+  });
+
+  test('cacheSegmentFromFile starts caching only after request popularity threshold is reached', async () => {
+    cache.updateConfig({
+      popularityThreshold: 2,
+      maxSegmentsPerVideo: 10
+    });
+
+    const tempFilePath = path.join(os.tmpdir(), `cache-module-${Date.now()}-${Math.random()}.bin`);
+    fs.writeFileSync(tempFilePath, Buffer.alloc(16, 7));
+
+    try {
+      const beforeThreshold = await cache.cacheSegmentFromFile('9', 0, tempFilePath, 0, 7, {
+        namespace: 'stream',
+        quality: 'fixed_2mb'
+      });
+      expect(beforeThreshold).toBe(false);
+
+      cache.recordAccess('9', { namespace: 'stream' });
+      cache.recordAccess('9', { namespace: 'stream' });
+
+      const afterThreshold = await cache.cacheSegmentFromFile('9', 0, tempFilePath, 0, 7, {
+        namespace: 'stream',
+        quality: 'fixed_2mb'
+      });
+      expect(afterThreshold).toBe(true);
+
+      const cached = cache.getCachedSegment('9', 0, {
+        namespace: 'stream',
+        quality: 'fixed_2mb',
+        startByte: 0,
+        endByte: 7
+      });
+      expect(Buffer.isBuffer(cached)).toBe(true);
+      expect(cached.length).toBe(8);
+    } finally {
+      fs.unlinkSync(tempFilePath);
+    }
   });
 });
