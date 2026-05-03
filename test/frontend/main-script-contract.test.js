@@ -10,6 +10,11 @@ function loadMainScript() {
   return fs.readFileSync(filePath, 'utf8');
 }
 
+function loadPlayerScript() {
+  const filePath = path.resolve(__dirname, '..', '..', 'public/js/player.js');
+  return fs.readFileSync(filePath, 'utf8');
+}
+
 describe('Main script contract', () => {
   test('uses passive scroll listener for infinite scrolling', () => {
     const source = loadMainScript();
@@ -35,5 +40,20 @@ describe('Main script contract', () => {
     expect(source.includes("videosGrid.addEventListener('pointermove', handleVideoGridPointerMove);")).toBe(true);
     expect(source.includes("window.matchMedia('(pointer: coarse)').matches")).toBe(true);
     expect(source.includes("window.addEventListener('scroll', clearActiveCardTilt, { passive: true });")).toBe(true);
+  });
+
+  test('timestamp sharing seeks after media readiness events instead of a fixed delay', () => {
+    const mainSource = loadMainScript();
+    const playerSource = loadPlayerScript();
+
+    expect(mainSource.includes('createDeferredOverlayTimestampSeek')).toBe(true);
+    expect(playerSource.includes('createDeferredTimestampSeek')).toBe(true);
+
+    for (const source of [mainSource, playerSource]) {
+      expect(source.includes("'loadedmetadata', 'durationchange', 'canplay', 'playing'")).toBe(true);
+      expect(source.includes("new URLSearchParams(window.location.search).get('t')")).toBe(true);
+      expect(source.includes('retryDelayMs = 250')).toBe(true);
+      expect(source.includes('currentTime = timeInSeconds')).toBe(false);
+    }
   });
 });

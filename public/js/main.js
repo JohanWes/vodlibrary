@@ -1599,24 +1599,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     
     overlayPlyrPlayer = new Plyr(overlayVideo, options);
-    
+    const initialTimestamp = getOverlayTimestampFromUrl();
+    const seekToInitialTimestamp = initialTimestamp !== null
+      ? createDeferredOverlayTimestampSeek(overlayPlyrPlayer, overlayVideo, initialTimestamp)
+      : null;
+
     overlayPlyrPlayer.on('ready', () => {
       console.log('Overlay Plyr player ready');
-      
-      // Check for timestamp parameter in URL
-      const urlParams = new URLSearchParams(window.location.search);
-      const startTime = urlParams.get('t');
-      if (startTime) {
-        const timeInSeconds = parseInt(startTime, 10);
-        if (!isNaN(timeInSeconds) && timeInSeconds > 0) {
-          setTimeout(() => {
-            try {
-              overlayPlyrPlayer.currentTime = timeInSeconds;
-            } catch (error) {
-              console.error('Error seeking to timestamp:', error);
-            }
-          }, 100);
-        }
+
+      if (seekToInitialTimestamp) {
+        seekToInitialTimestamp();
       }
     });
     
@@ -1638,6 +1630,82 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Overlay player error:', event);
       showToast('Error playing video. Please try again.', 'error');
     });
+  }
+
+  function getOverlayTimestampFromUrl() {
+    const timestamp = new URLSearchParams(window.location.search).get('t');
+    if (timestamp === null) return null;
+
+    const seconds = Number(timestamp);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+
+    return Math.floor(seconds);
+  }
+
+  function createDeferredOverlayTimestampSeek(player, mediaElement, targetTime) {
+    const maxAttempts = 20;
+    const retryDelayMs = 250;
+    const seekEvents = ['loadedmetadata', 'durationchange', 'canplay', 'playing'];
+    let attempts = 0;
+    let retryTimer = null;
+    let completed = false;
+
+    const cleanup = () => {
+      seekEvents.forEach(eventName => {
+        mediaElement.removeEventListener(eventName, attemptSeek);
+      });
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const scheduleRetry = () => {
+      if (completed || attempts >= maxAttempts || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        attemptSeek();
+      }, retryDelayMs);
+    };
+
+    function attemptSeek() {
+      if (completed) return;
+      attempts += 1;
+
+      try {
+        player.currentTime = targetTime;
+
+        const actualTime = Number(player.currentTime || mediaElement.currentTime || 0);
+        if (Math.abs(actualTime - targetTime) < 1) {
+          completed = true;
+          cleanup();
+          console.log(`Overlay seeked to timestamp: ${targetTime}s`);
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          completed = true;
+          cleanup();
+          console.warn(`Overlay timestamp seek did not settle near ${targetTime}s`);
+          return;
+        }
+      } catch (error) {
+        if (attempts >= maxAttempts) {
+          completed = true;
+          cleanup();
+          console.error('Overlay timestamp seek failed:', error);
+          return;
+        }
+      }
+
+      scheduleRetry();
+    }
+
+    seekEvents.forEach(eventName => {
+      mediaElement.addEventListener(eventName, attemptSeek);
+    });
+
+    return attemptSeek;
   }
   
   /**

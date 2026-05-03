@@ -236,27 +236,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     };
     
     plyrPlayer = new Plyr(videoPlayer, options);
-    
+    const initialTimestamp = getTimestampFromUrl();
+    const seekToInitialTimestamp = initialTimestamp !== null
+      ? createDeferredTimestampSeek(plyrPlayer, videoPlayer, initialTimestamp, 'Player')
+      : null;
+
     plyrPlayer.on('ready', event => {
       console.log('Plyr player ready');
       document.querySelector('.video-info').classList.add('fade-in');
-      
-      // Check for timestamp parameter in URL and seek
-      const urlParams = new URLSearchParams(window.location.search);
-      const startTime = urlParams.get('t');
-      if (startTime) {
-        const timeInSeconds = parseInt(startTime, 10);
-        if (!isNaN(timeInSeconds) && timeInSeconds > 0) {
-          console.log(`Seeking to start time: ${timeInSeconds}s`);
-          // Use a small timeout to ensure the player is definitely ready for seeking
-          setTimeout(() => {
-            try {
-              plyrPlayer.currentTime = timeInSeconds;
-            } catch (seekError) {
-              console.error('Error seeking player on load:', seekError);
-            }
-          }, 100); // 100ms delay, adjust if needed
-        }
+
+      if (seekToInitialTimestamp) {
+        seekToInitialTimestamp();
       }
     });
     
@@ -272,6 +262,82 @@ document.addEventListener('DOMContentLoaded', async () => {
       console.error('Plyr playback error:', event.detail.plyr.source);
       showToast('Error playing video. Please try again.', 'error');
     });
+  }
+
+  function getTimestampFromUrl() {
+    const timestamp = new URLSearchParams(window.location.search).get('t');
+    if (timestamp === null) return null;
+
+    const seconds = Number(timestamp);
+    if (!Number.isFinite(seconds) || seconds < 0) return null;
+
+    return Math.floor(seconds);
+  }
+
+  function createDeferredTimestampSeek(player, mediaElement, targetTime, label) {
+    const maxAttempts = 20;
+    const retryDelayMs = 250;
+    const seekEvents = ['loadedmetadata', 'durationchange', 'canplay', 'playing'];
+    let attempts = 0;
+    let retryTimer = null;
+    let completed = false;
+
+    const cleanup = () => {
+      seekEvents.forEach(eventName => {
+        mediaElement.removeEventListener(eventName, attemptSeek);
+      });
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = null;
+      }
+    };
+
+    const scheduleRetry = () => {
+      if (completed || attempts >= maxAttempts || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        attemptSeek();
+      }, retryDelayMs);
+    };
+
+    function attemptSeek() {
+      if (completed) return;
+      attempts += 1;
+
+      try {
+        player.currentTime = targetTime;
+
+        const actualTime = Number(player.currentTime || mediaElement.currentTime || 0);
+        if (Math.abs(actualTime - targetTime) < 1) {
+          completed = true;
+          cleanup();
+          console.log(`${label} seeked to timestamp: ${targetTime}s`);
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          completed = true;
+          cleanup();
+          console.warn(`${label} timestamp seek did not settle near ${targetTime}s`);
+          return;
+        }
+      } catch (seekError) {
+        if (attempts >= maxAttempts) {
+          completed = true;
+          cleanup();
+          console.error(`${label} timestamp seek failed:`, seekError);
+          return;
+        }
+      }
+
+      scheduleRetry();
+    }
+
+    seekEvents.forEach(eventName => {
+      mediaElement.addEventListener(eventName, attemptSeek);
+    });
+
+    return attemptSeek;
   }
   
   /**
