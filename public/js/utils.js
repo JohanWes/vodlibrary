@@ -73,6 +73,38 @@ function formatDuration(seconds) {
   return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
+/**
+ * Resolve an application path beneath the document's base href
+ * @param {string} path - Application path, with or without leading slash (query/hash preserved)
+ * @returns {string} - Root-relative URL resolved against the document base
+ */
+function appUrl(path) {
+  let basePath = '/';
+  if (typeof document !== 'undefined') {
+    const baseElement = document.querySelector('base[href]');
+    const baseHref = baseElement ? baseElement.getAttribute('href') : '';
+    if (baseHref) {
+      try {
+        // Resolve the base href against the page URL (document.URL excludes the base itself)
+        basePath = new URL(baseHref, document.URL || undefined).pathname;
+      } catch (urlError) {
+        basePath = baseHref.split(/[?#]/)[0] || '/';
+      }
+    }
+  }
+
+  // Normalize the base path to exactly one leading and one trailing slash
+  const trimmedBase = basePath.replace(/^\/+|\/+$/g, '');
+  basePath = trimmedBase ? `/${trimmedBase}/` : '/';
+
+  // Keep query/hash verbatim, strip a leading slash from the app path
+  const suffixIndex = path.search(/[?#]/);
+  const pathPart = suffixIndex === -1 ? path : path.slice(0, suffixIndex);
+  const suffix = suffixIndex === -1 ? '' : path.slice(suffixIndex);
+
+  return `${basePath}${pathPart.replace(/^\/+/, '')}${suffix}`;
+}
+
 // Add CSS for toast and animations
 function addUtilStyles() {
   const style = document.createElement('style');
@@ -136,7 +168,7 @@ function addUtilStyles() {
  */
 async function getAppConfig() {
   try {
-    const response = await fetch('/api/config');
+    const response = await fetch(appUrl('/api/config'));
     if (!response.ok) {
       throw new Error('Failed to fetch app configuration');
     }
@@ -251,6 +283,7 @@ window.VideoUtils = {
   showToast,
   getPlaceholderThumbnail,
   formatDuration,
+  appUrl,
   addUtilStyles,
   getAppConfig,
   getVODsName,

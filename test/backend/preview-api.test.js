@@ -92,6 +92,17 @@ describe('Public Preview API Endpoints', () => {
 
       expect(response.body.error).toBe('Video not found');
     });
+
+    test('returns 400 for a malformed video id', async () => {
+      const { getVideoById } = require('../../db/database');
+
+      const response = await request(app)
+        .get('/api/videos/not-a-number/preview-info')
+        .expect(400);
+
+      expect(response.body.error).toBe('Invalid video id');
+      expect(getVideoById).not.toHaveBeenCalled();
+    });
   });
 
   describe('GET /api/videos/:id/preview/:timestamp', () => {
@@ -104,10 +115,14 @@ describe('Public Preview API Endpoints', () => {
         .expect(200);
 
       expect(response.headers['content-type']).toContain('video/mp4');
-      expect(response.headers['cache-control']).toBe('public, max-age=86400');
+      expect(response.headers['cache-control']).toBe('private, max-age=86400');
+
+      const servedPath = fs.createReadStream.mock.calls[0][0];
+      expect(servedPath).toMatch(/[\\/]previews[\\/]test_10s\.mp4$/);
+      expect(servedPath).not.toBe(testVideoData.path);
     });
 
-    test('falls back to video segment when no preview clips exist', async () => {
+    test('returns 404 when no preview clips exist instead of serving source bytes', async () => {
       const { getVideoById } = require('../../db/database');
       getVideoById.mockResolvedValue({
         ...testVideoData,
@@ -117,23 +132,48 @@ describe('Public Preview API Endpoints', () => {
 
       const response = await request(app)
         .get('/api/videos/1/preview/10')
-        .expect(206);
+        .expect(404);
 
-      expect(response.headers['accept-ranges']).toBe('bytes');
+      expect(response.body.error).toBe('Preview clip not found');
+      expect(fs.promises.access).not.toHaveBeenCalled();
+      expect(fs.promises.stat).not.toHaveBeenCalled();
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+    });
+
+    test('returns 404 for malformed preview data', async () => {
+      const { getVideoById } = require('../../db/database');
+      getVideoById.mockResolvedValue({
+        ...testVideoData,
+        preview_clips: '{not valid json',
+        preview_generation_status: 'pending'
+      });
+
+      const response = await request(app)
+        .get('/api/videos/1/preview/10')
+        .expect(404);
+
+      expect(response.body.error).toBe('Preview clip not found');
+      expect(fs.createReadStream).not.toHaveBeenCalled();
     });
 
     test('redirects to CDN when configured', async () => {
+      const originalEnableAuth = process.env.ENABLE_AUTH;
+      process.env.ENABLE_AUTH = 'false';
       const { getVideoById } = require('../../db/database');
       getVideoById.mockResolvedValue(testVideoData);
 
       mockCdnManager.shouldUseCdn.mockReturnValue(true);
       mockCdnManager.getCdnUrl.mockReturnValue('https://cdn.example.com/previews/test_10s.mp4');
 
-      const response = await request(app)
-        .get('/api/videos/1/preview/10')
-        .expect(302);
+      try {
+        const response = await request(app)
+          .get('/api/videos/1/preview/10')
+          .expect(302);
 
-      expect(response.headers.location).toBe('https://cdn.example.com/previews/test_10s.mp4');
+        expect(response.headers.location).toBe('https://cdn.example.com/previews/test_10s.mp4');
+      } finally {
+        process.env.ENABLE_AUTH = originalEnableAuth;
+      }
     });
 
     test('returns 404 when preview file is missing', async () => {
@@ -147,6 +187,78 @@ describe('Public Preview API Endpoints', () => {
         .expect(404);
 
       expect(response.body.error).toBe('Preview file not found');
+    });
+
+    test('returns 400 for a malformed video id', async () => {
+      const { getVideoById } = require('../../db/database');
+
+      const nonNumeric = await request(app)
+        .get('/api/videos/not-a-number/preview/10')
+        .expect(400);
+      const nonCanonical = await request(app)
+        .get('/api/videos/01/preview/10')
+        .expect(400);
+
+      expect(nonNumeric.body.error).toBe('Invalid video id');
+      expect(nonCanonical.body.error).toBe('Invalid video id');
+      expect(getVideoById).not.toHaveBeenCalled();
+    });
+
+    test('returns 400 for a malformed timestamp', async () => {
+      const { getVideoById } = require('../../db/database');
+
+      const negative = await request(app)
+        .get('/api/videos/1/preview/-5')
+        .expect(400);
+      const nonInteger = await request(app)
+        .get('/api/videos/1/preview/12.5')
+        .expect(400);
+
+      expect(negative.body.error).toBe('Invalid timestamp');
+      expect(nonInteger.body.error).toBe('Invalid timestamp');
+      expect(getVideoById).not.toHaveBeenCalled();
+    });
+
+    test('returns 404 for a traversal clip path instead of escaping previews dir', async () => {
+      const { getVideoById } = require('../../db/database');
+      getVideoById.mockResolvedValue({
+        ...testVideoData,
+        preview_clips: JSON.stringify({
+          clips: [{ timestamp: 10, path: '/previews/../secret.mp4', duration: 5, size: 1024 }]
+        })
+      });
+
+      const response = await request(app)
+        .get('/api/videos/1/preview/10')
+        .expect(404);
+
+      expect(response.body.error).toBe('Preview file not found');
+      expect(fs.promises.access).not.toHaveBeenCalled();
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+    });
+
+    test('returns 404 for empty or dot clip basenames', async () => {
+      const { getVideoById } = require('../../db/database');
+      getVideoById.mockResolvedValue({
+        ...testVideoData,
+        preview_clips: JSON.stringify({
+          clips: [
+            { timestamp: 10, path: '/previews/', duration: 5, size: 1024 },
+            { timestamp: 20, path: '/previews/.', duration: 5, size: 1024 }
+          ]
+        })
+      });
+
+      const emptyBasename = await request(app)
+        .get('/api/videos/1/preview/10')
+        .expect(404);
+      const dotBasename = await request(app)
+        .get('/api/videos/1/preview/20')
+        .expect(404);
+
+      expect(emptyBasename.body.error).toBe('Preview file not found');
+      expect(dotBasename.body.error).toBe('Preview file not found');
+      expect(fs.createReadStream).not.toHaveBeenCalled();
     });
   });
 });

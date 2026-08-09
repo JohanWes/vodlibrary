@@ -22,32 +22,43 @@ function normalizePublicAssetPath(assetPath) {
   return String(assetPath || '').replace(/^\/+/, '');
 }
 
-async function serveVideoSegmentFallback(res, video, startTime) {
-  const videoPath = video.path;
-  const stat = await fs.promises.stat(videoPath);
-  const fileSize = stat.size;
+function parseCanonicalSafeInteger(value, positive) {
+  if (typeof value !== 'string' || value.length === 0) {
+    return null;
+  }
 
-  const duration = Math.max(video.duration || 1, 1);
-  const bytesPerSecond = fileSize / duration;
-  const startByte = Math.max(0, Math.floor(startTime * bytesPerSecond));
-  const endByte = Math.min(Math.floor((startTime + 3) * bytesPerSecond), fileSize - 1);
+  const pattern = positive ? /^[1-9]\d*$/ : /^(0|[1-9]\d*)$/;
+  if (!pattern.test(value)) {
+    return null;
+  }
 
-  const chunkSize = (endByte - startByte) + 1;
-  res.writeHead(206, {
-    'Content-Range': `bytes ${startByte}-${endByte}/${fileSize}`,
-    'Accept-Ranges': 'bytes',
-    'Content-Length': chunkSize,
-    'Content-Type': 'video/mp4',
-    'Cache-Control': 'public, max-age=3600'
-  });
+  const numeric = Number(value);
+  if (!Number.isSafeInteger(numeric)) {
+    return null;
+  }
 
-  fs.createReadStream(videoPath, { start: startByte, end: endByte }).pipe(res);
+  return numeric;
+}
+
+function isSafeClipPath(clipPath) {
+  const segments = clipPath.split('/');
+  if (segments.some((segment) => segment === '..')) {
+    return false;
+  }
+
+  const basename = segments[segments.length - 1];
+  return basename !== '' && basename !== '.' && basename !== '..';
 }
 
 router.get('/videos/:id/preview-info', async (req, res) => {
+  const videoId = parseCanonicalSafeInteger(req.params.id, true);
+  if (videoId === null) {
+    return res.status(400).json({ error: 'Invalid video id' });
+  }
+
   try {
     const db = req.app.locals.db;
-    const video = await getVideoById(db, req.params.id);
+    const video = await getVideoById(db, videoId);
 
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
@@ -66,12 +77,20 @@ router.get('/videos/:id/preview-info', async (req, res) => {
 });
 
 router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
+  const videoId = parseCanonicalSafeInteger(req.params.id, true);
+  if (videoId === null) {
+    return res.status(400).json({ error: 'Invalid video id' });
+  }
+
+  const timestamp = parseCanonicalSafeInteger(req.params.timestamp || '10', false);
+  if (timestamp === null) {
+    return res.status(400).json({ error: 'Invalid timestamp' });
+  }
+
   try {
     const db = req.app.locals.db;
-    const videoId = req.params.id;
-    const timestamp = parseInt(req.params.timestamp || '10', 10);
-
     const video = await getVideoById(db, videoId);
+
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
     }
@@ -79,47 +98,37 @@ router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
     const previewClips = parsePreviewClips(video.preview_clips);
 
     if (!previewClips || !Array.isArray(previewClips.clips)) {
-      await serveVideoSegmentFallback(res, video, timestamp);
-      return;
+      return res.status(404).json({ error: 'Preview clip not found' });
     }
 
-    const clip = previewClips.clips.find((candidate) => candidate.timestamp === timestamp);
+    const clip = previewClips.clips.find((candidate) => Number(candidate.timestamp) === timestamp);
     if (!clip) {
       return res.status(404).json({ error: 'Preview clip not found' });
     }
 
     const normalizedClipPath = normalizePublicAssetPath(clip.path);
-    const publicPreviewPath = path.join(__dirname, '..', 'public', normalizedClipPath);
-    const configuredPreviewDir = process.env.PREVIEWS_CACHE_DIR;
-    const dataPreviewPath = configuredPreviewDir
-      ? path.join(configuredPreviewDir, path.basename(normalizedClipPath))
-      : null;
+    if (!isSafeClipPath(normalizedClipPath)) {
+      return res.status(404).json({ error: 'Preview file not found' });
+    }
 
-    let previewPath = publicPreviewPath;
+    const previewsDir = process.env.PREVIEWS_CACHE_DIR || path.join(__dirname, '..', 'public', 'previews');
+    const previewPath = path.join(previewsDir, path.basename(normalizedClipPath));
+
     try {
-      await fs.promises.access(publicPreviewPath, fs.constants.R_OK);
+      await fs.promises.access(previewPath, fs.constants.R_OK);
     } catch (_error) {
-      if (dataPreviewPath) {
-        try {
-          await fs.promises.access(dataPreviewPath, fs.constants.R_OK);
-          previewPath = dataPreviewPath;
-        } catch (_error2) {
-          return res.status(404).json({ error: 'Preview file not found' });
-        }
-      } else {
-        return res.status(404).json({ error: 'Preview file not found' });
-      }
+      return res.status(404).json({ error: 'Preview file not found' });
     }
 
     const stat = await fs.promises.stat(previewPath);
 
-    if (cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
+    if (process.env.ENABLE_AUTH !== 'true' && cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
       const clipPathForCdn = clip.path.startsWith('/') ? clip.path : `/${clip.path}`;
       const cdnUrl = cdnManager.getCdnUrl(clipPathForCdn, 'preview');
       return res.redirect(cdnUrl);
     }
 
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', `${process.env.ENABLE_AUTH === 'true' ? 'private' : 'public'}, max-age=86400`);
     res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Accept-Ranges', 'bytes');

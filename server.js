@@ -21,6 +21,13 @@ const {
 const { scanLibrary, processVideoFile, isVideoFile } = require('./lib/scanner');
 const videoCache = require('./lib/cache');
 const cdnManager = require('./lib/cdn');
+const {
+  issueSessionToken,
+  verifySessionToken,
+  verifyShareToken
+} = require('./lib/security-tokens');
+const { toVideoCard } = require('./lib/client-video');
+const { normalizeBasePath, parsePublicBaseUrl } = require('./lib/url-config');
 
 const app = express();
 
@@ -50,7 +57,7 @@ function sliceCanonicalSegmentForRange(cachedSegment, segmentStart, start, end) 
 // Get port and IP from environment variables with fallbacks
 const port = process.env.PORT || 8005;
 const publicIp = process.env.HOST_IP || 'localhost';
-const basePath = process.env.BASE_PATH || '';
+const basePath = normalizeBasePath(process.env.BASE_PATH || '');
 const vodsName = process.env.VODS_NAME || 'VODlibrary';
 
 // Initialize server-side caching
@@ -86,8 +93,8 @@ cdnManager.initCdn({
   signedUrlsSecret: cdnSignedUrlsSecret
 });
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '100kb' }));
+app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 app.use(cookieParser());
 
 let sseClients = new Set();
@@ -135,117 +142,180 @@ if (!fs.existsSync(thumbnailDir)) {
 }
 
 const SESSION_KEY = process.env.SESSION_KEY;
+const SESSION_SECRET = process.env.SESSION_SECRET;
+const SHARE_TOKEN_SECRET = process.env.SHARE_TOKEN_SECRET;
 const ENABLE_AUTH = process.env.ENABLE_AUTH === 'true';
 const AUTH_COOKIE_NAME = 'auth_token';
-const AUTH_COOKIE_VALUE = 'valid-session';
+const SHARE_COOKIE_NAME = 'share_auth';
+const AUTH_COOKIE_MAX_AGE = 7 * 24 * 60 * 60 * 1000;
 const AUTH_COOKIE_OPTIONS = {
   httpOnly: true,
-  maxAge: 7 * 24 * 60 * 60 * 10000,
+  sameSite: 'lax',
+  secure: process.env.AUTH_COOKIE_SECURE === 'true',
+  maxAge: AUTH_COOKIE_MAX_AGE,
   path: basePath || '/'
 };
+
+function isApiOrMediaRequest(req) {
+  return req.path.startsWith(basePath + '/api/')
+    || req.path.startsWith(basePath + '/previews/')
+    || req.path.startsWith(basePath + '/thumbnails/');
+}
+
+function getSharedVideoId(req) {
+  const share = verifyShareToken(
+    req.cookies && req.cookies[SHARE_COOKIE_NAME],
+    SHARE_TOKEN_SECRET
+  );
+  if (!share || (req.method !== 'GET' && req.method !== 'HEAD')) {
+    return null;
+  }
+
+  const allowedPaths = new Set([
+    `${basePath}/watch/${share.videoId}`,
+    `${basePath}/api/videos/${share.videoId}`,
+    `${basePath}/api/videos/${share.videoId}/stream`
+  ]);
+  return allowedPaths.has(req.path) ? share.videoId : null;
+}
 
 function checkAuth(req, res, next) {
   if (!ENABLE_AUTH) {
     return next();
   }
 
-  if (!SESSION_KEY) {
-    console.error('Authentication is enabled but SESSION_KEY is not set.');
-    return res.status(500).send('Server configuration error: SESSION_KEY is required when authentication is enabled.');
+  if (!SESSION_KEY || !SESSION_SECRET) {
+    console.error('Authentication is enabled but SESSION_KEY or SESSION_SECRET is not set.');
+    return res.status(500).send('Server configuration error: authentication secrets are required.');
   }
 
-  const allowedPaths = [
-    basePath + '/login.html',
-    basePath + '/login',
-    basePath + '/css/style.css',
-    basePath + '/favicon.ico'
-  ];
-
-  if (allowedPaths.includes(req.path) || (req.path === basePath + '/login' && req.method === 'POST')) {
+  if (verifySessionToken(
+    req.cookies && req.cookies[AUTH_COOKIE_NAME],
+    SESSION_SECRET
+  )) {
     return next();
   }
 
-  if (req.cookies && req.cookies[AUTH_COOKIE_NAME] === AUTH_COOKIE_VALUE) {
+  if (getSharedVideoId(req) !== null) {
     return next();
   }
 
+  if (isApiOrMediaRequest(req)) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
   return res.redirect(basePath + '/login.html');
 }
 
-const staticCacheDuration = 86400 * 1000;
-
-// Static public media. These are intentionally public for preview UX.
-app.use(basePath + '/previews', express.static(path.join(publicDir, 'previews'), {
-  maxAge: staticCacheDuration
-}));
-const configuredPreviewDir = process.env.PREVIEWS_CACHE_DIR;
-if (configuredPreviewDir && path.resolve(configuredPreviewDir) !== path.resolve(path.join(publicDir, 'previews'))) {
-  app.use(basePath + '/previews', express.static(configuredPreviewDir, {
-    maxAge: staticCacheDuration
-  }));
-}
-app.use(basePath + '/thumbnails', express.static(path.join(publicDir, 'thumbnails'), {
-  maxAge: staticCacheDuration
-}));
-// Also serve from THUMBNAIL_CACHE_DIR if configured separately from public/thumbnails
-const configuredThumbnailDir = process.env.THUMBNAIL_CACHE_DIR;
-if (configuredThumbnailDir && path.resolve(configuredThumbnailDir) !== path.resolve(path.join(publicDir, 'thumbnails'))) {
-  app.use(basePath + '/thumbnails', express.static(configuredThumbnailDir, {
-    maxAge: staticCacheDuration
-  }));
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
-// Login/public assets
-app.get(basePath + '/login.html', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'login.html'));
+function applyBasePath(html) {
+  const baseHref = basePath ? `${basePath}/` : '/';
+  return html.replace('<base href="/">', `<base href="${escapeHtml(baseHref)}">`);
+}
+
+async function loadTemplate(req, name) {
+  const key = `${name}Template`;
+  if (!req.app.locals[key]) {
+    req.app.locals[key] = await fs.promises.readFile(path.join(publicDir, name), 'utf8');
+  }
+  return applyBasePath(req.app.locals[key]);
+}
+
+const privateStaticOptions = {
+  cacheControl: false,
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', `${ENABLE_AUTH ? 'private' : 'public'}, max-age=86400`);
+  }
+};
+
+// Login and immutable assets required to boot a scoped shared player.
+app.get(basePath + '/login.html', async (req, res) => {
+  try {
+    return res.send(await loadTemplate(req, 'login.html'));
+  } catch (error) {
+    console.error('Error serving login page:', error);
+    return res.status(500).send('Internal Server Error');
+  }
 });
-
 app.get(basePath + '/css/style.css', (_req, res) => {
   res.sendFile(path.join(publicDir, 'css', 'style.css'));
 });
-
+app.get(basePath + '/js/utils.js', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'js', 'utils.js'));
+});
+app.get(basePath + '/js/player.js', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'js', 'player.js'));
+});
 app.get(basePath + '/favicon.ico', (_req, res) => {
   res.sendFile(path.join(publicDir, 'favicon.ico'));
 });
 
 app.post(basePath + '/login', (req, res) => {
-  if (!SESSION_KEY) {
-    return res.redirect(basePath + '/');
+  if (!SESSION_KEY || !SESSION_SECRET) {
+    return res.status(500).send('Server configuration error: authentication secrets are required.');
   }
 
-  const submittedKey = req.body.sessionKey;
-  if (submittedKey === SESSION_KEY) {
-    res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
+  if (typeof req.body.sessionKey === 'string' && req.body.sessionKey === SESSION_KEY) {
+    res.cookie(
+      AUTH_COOKIE_NAME,
+      issueSessionToken(SESSION_SECRET),
+      AUTH_COOKIE_OPTIONS
+    );
     return res.redirect(basePath + '/');
   }
 
   return res.redirect(basePath + '/login.html?error=1');
 });
 
-app.get(basePath + '/:sessionKeyParam/*', (req, res, next) => {
-  if (!SESSION_KEY) {
-    return next();
+app.get(basePath + '/s/:token', (req, res) => {
+  const share = verifyShareToken(req.params.token, SHARE_TOKEN_SECRET);
+  if (!share) {
+    return res.status(404).send('Share link not found');
   }
 
-  const sessionKeyParam = req.params.sessionKeyParam;
-  if (sessionKeyParam !== SESSION_KEY) {
-    return next();
-  }
-
-  res.cookie(AUTH_COOKIE_NAME, AUTH_COOKIE_VALUE, AUTH_COOKIE_OPTIONS);
-  const newPath = req.originalUrl.replace(`/${sessionKeyParam}`, '');
-  const redirectUrl = newPath.startsWith(basePath) ? newPath : basePath + newPath;
-  return res.redirect(redirectUrl);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.cookie(SHARE_COOKIE_NAME, req.params.token, {
+    ...AUTH_COOKIE_OPTIONS,
+    maxAge: share.expiresAt - Date.now()
+  });
+  return res.redirect(303, `${basePath}/watch/${share.videoId}`);
 });
 
-// SSE endpoint is public by design (live library updates for grid view).
+app.get(basePath + '/api/config', (_req, res) => {
+  res.json({ vodsName });
+});
+
+// Everything below this point is private when authentication is enabled.
+app.use(checkAuth);
+
+app.use(basePath + '/previews', express.static(
+  process.env.PREVIEWS_CACHE_DIR || path.join(publicDir, 'previews'),
+  privateStaticOptions
+));
+app.use(basePath + '/thumbnails', express.static(
+  process.env.THUMBNAIL_CACHE_DIR || path.join(publicDir, 'thumbnails'),
+  privateStaticOptions
+));
+
+const sseMaxClients = Math.max(1, Number.parseInt(process.env.SSE_MAX_CLIENTS || '100', 10) || 100);
 app.get(basePath + '/api/updates', (req, res) => {
+  if (sseClients.size >= sseMaxClients) {
+    return res.status(503).json({ error: 'Too many update connections' });
+  }
+
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     Connection: 'keep-alive'
   });
-
   res.write('retry: 5000\n\n');
 
   const client = {
@@ -253,40 +323,31 @@ app.get(basePath + '/api/updates', (req, res) => {
     res,
     heartbeatInterval: null
   };
-
   client.heartbeatInterval = setInterval(() => {
     if (res.writableEnded || res.destroyed) {
       removeSseClient(client);
       return;
     }
-
     try {
       res.write(': ping\n\n');
     } catch (_error) {
       removeSseClient(client);
     }
   }, 25000);
-
   sseClients.add(client);
 
-  req.on('close', () => {
+  const close = () => {
     removeSseClient(client);
-    res.end();
-  });
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
+  req.on('close', close);
+  res.on('error', close);
 });
 
-app.get(basePath + '/api/config', (_req, res) => {
-  res.json({
-    vodsName: process.env.VODS_NAME || 'VODlibrary'
-  });
-});
-
-// Public preview APIs are explicitly mounted before auth.
 const publicApiRoutes = require('./routes/public-api');
 app.use(basePath + '/api', publicApiRoutes);
-
-// Protected routes below this line.
-app.use(checkAuth);
 
 app.get(basePath + '/watch/:id', async (req, res) => {
   const videoId = req.params.id;
@@ -298,40 +359,31 @@ app.get(basePath + '/watch/:id', async (req, res) => {
       return res.status(404).send('Video not found');
     }
 
-    let playerHtml = req.app.locals.playerTemplate;
-    if (!playerHtml) {
-      playerHtml = await fs.promises.readFile(path.join(publicDir, 'player.html'), 'utf8');
-      req.app.locals.playerTemplate = playerHtml;
-    }
-
-    const ogTitle = video.title;
-    const ogType = 'video.movie';
-    const thumbnailPath = video.thumbnail_path || '/favicon.ico';
-    let ogImage = `${req.protocol}://${req.get('host')}${basePath}${thumbnailPath}`;
-    if (cdnEnabled && video.thumbnail_path) {
-      ogImage = cdnManager.getCdnUrl(video.thumbnail_path, 'thumbnail');
-    }
-
-    const ogUrl = `${req.protocol}://${req.get('host')}${basePath}/watch/${videoId}`;
-    const videoStreamUrl = `${req.protocol}://${req.get('host')}${basePath}/api/videos/${videoId}/stream`;
-
+    let playerHtml = await loadTemplate(req, 'player.html');
+    const title = escapeHtml(video.title);
+    const siteName = escapeHtml(vodsName);
+    const publicBase = parsePublicBaseUrl(process.env.SHARE_BASE_URL, basePath);
+    const width = Number.isFinite(video.width) && video.width > 0 ? video.width : 1280;
+    const height = Number.isFinite(video.height) && video.height > 0 ? video.height : 720;
+    const absoluteTags = !ENABLE_AUTH && publicBase
+      ? `
+  <meta property="og:url" content="${escapeHtml(`${publicBase}/watch/${videoId}`)}" />
+  <meta property="og:video" content="${escapeHtml(`${publicBase}/api/videos/${videoId}/stream`)}" />
+  <meta property="og:video:secure_url" content="${escapeHtml(`${publicBase}/api/videos/${videoId}/stream`)}" />`
+      : '';
     const ogTags = `
-  <meta property="og:title" content="${ogTitle}" />
-  <meta property="og:type" content="${ogType}" />
-  <meta property="og:image" content="${ogImage}" />
-  <meta property="og:url" content="${ogUrl}" />
-  <meta property="og:description" content="Watch ${ogTitle} on ${vodsName}" />
-  <meta property="og:site_name" content="${vodsName}" />
-  <meta property="og:video" content="${videoStreamUrl}" />
+  <meta property="og:title" content="${title}" />
+  <meta property="og:type" content="video.movie" />
+  <meta property="og:description" content="Watch ${title} on ${siteName}" />
+  <meta property="og:site_name" content="${siteName}" />
   <meta property="og:video:type" content="video/mp4" />
-  <meta property="og:video:secure_url" content="${videoStreamUrl}" />
-  <meta property="og:video:width" content="${video.width || 1280}" />
-  <meta property="og:video:height" content="${video.height || 720}" />
+  <meta property="og:video:width" content="${width}" />
+  <meta property="og:video:height" content="${height}" />${absoluteTags}
     `;
 
     playerHtml = playerHtml.replace('</head>', `${ogTags}\n</head>`);
-    playerHtml = playerHtml.replace('<title>Loading...</title>', `<title>${ogTitle}</title>`);
-
+    playerHtml = playerHtml.replace('<title>Loading...</title>', `<title>${title}</title>`);
+    res.setHeader('Referrer-Policy', 'no-referrer');
     return res.send(playerHtml);
   } catch (error) {
     console.error(`Error serving video ${videoId}:`, error);
@@ -352,10 +404,10 @@ app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
     const fileSize = stat.size;
     const range = req.headers.range;
 
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Cache-Control', `${ENABLE_AUTH ? 'private' : 'public'}, max-age=3600`);
     res.setHeader('ETag', `"${video.id}-${stat.mtime.getTime()}"`);
 
-    if (cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
+    if (!ENABLE_AUTH && cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
       const protocol = req.protocol;
       const host = req.get('host');
       const originalUrl = `${protocol}://${host}${req.originalUrl}`;
@@ -459,8 +511,13 @@ app.get(basePath + '/api/videos/:id/stream', async (req, res) => {
   }
 });
 
-app.get(basePath + '/', (_req, res) => {
-  res.sendFile(path.join(publicDir, 'index.html'));
+app.get(basePath + '/', async (req, res) => {
+  try {
+    return res.send(await loadTemplate(req, 'index.html'));
+  } catch (error) {
+    console.error('Error serving index page:', error);
+    return res.status(500).send('Internal Server Error');
+  }
 });
 
 app.use(basePath, express.static(publicDir));
@@ -567,7 +624,7 @@ function setupLibraryWatcher(db) {
         await processVideoFile(db, filePath);
         const newVideo = await getVideoByPath(db, filePath);
         if (newVideo) {
-          sendSseUpdate({ type: 'add', video: newVideo });
+          sendSseUpdate({ type: 'add', video: toVideoCard(newVideo) });
         }
       });
     })
@@ -599,6 +656,9 @@ function setupLibraryWatcher(db) {
 }
 
 async function startServer() {
+  if (ENABLE_AUTH && (!SESSION_KEY || !SESSION_SECRET)) {
+    throw new Error('SESSION_KEY and SESSION_SECRET are required when authentication is enabled.');
+  }
   try {
     const db = await initializeDatabase();
 
@@ -606,17 +666,14 @@ async function startServer() {
     app.locals.sseClients = sseClients;
     app.locals.sendSseUpdate = sendSseUpdate;
     app.locals.playerTemplate = null;
-
-    try {
-      app.locals.playerTemplate = await fs.promises.readFile(path.join(publicDir, 'player.html'), 'utf8');
-    } catch (templateError) {
-      console.warn('Could not preload player template, using lazy load fallback.', templateError.message);
-    }
+    app.locals['index.htmlTemplate'] = null;
+    app.locals['login.htmlTemplate'] = null;
+    app.locals['player.htmlTemplate'] = null;
 
     const watcherState = setupLibraryWatcher(db);
     app.locals.watcherState = watcherState;
 
-    const server = app.listen({ port, host: '::', ipv6Only: false }, () => {
+    const server = app.listen({ port, host: publicIp }, () => {
       console.log('Video server running at:');
       console.log(`- Local: http://localhost:${port}${basePath}`);
       console.log(`- Public: http://${publicIp}:${port}${basePath}`);

@@ -3,6 +3,7 @@ const express = require('express');
 const cookieParser = require('cookie-parser');
 const fs = require('fs');
 const { Readable } = require('stream');
+const { issueSessionToken, verifySessionToken } = require('../../lib/security-tokens');
 
 const mockDb = {
   get: jest.fn(),
@@ -51,7 +52,7 @@ describe('Public Preview Auth + CDN Integration', () => {
         return next();
       }
 
-      if (req.cookies && req.cookies.auth_token === 'valid-session') {
+      if (verifySessionToken(req.cookies && req.cookies.auth_token, process.env.SESSION_SECRET)) {
         return next();
       }
 
@@ -99,23 +100,29 @@ describe('Public Preview Auth + CDN Integration', () => {
   test('allows protected endpoint with valid auth cookie', async () => {
     const response = await request(app)
       .get('/api/protected')
-      .set('Cookie', 'auth_token=valid-session')
+      .set('Cookie', `auth_token=${issueSessionToken(process.env.SESSION_SECRET)}`)
       .expect(200);
 
     expect(response.body.ok).toBe(true);
   });
 
   test('redirects preview requests to CDN when enabled', async () => {
+    const originalEnableAuth = process.env.ENABLE_AUTH;
+    process.env.ENABLE_AUTH = 'false';
     const { getVideoById } = require('../../db/database');
     getVideoById.mockResolvedValue(testVideoData);
 
     mockCdnManager.shouldUseCdn.mockReturnValue(true);
     mockCdnManager.getCdnUrl.mockReturnValue('https://cdn.example.com/previews/test_10s.mp4');
 
-    const response = await request(app)
-      .get('/api/videos/1/preview/10')
-      .expect(302);
+    try {
+      const response = await request(app)
+        .get('/api/videos/1/preview/10')
+        .expect(302);
 
-    expect(response.headers.location).toBe('https://cdn.example.com/previews/test_10s.mp4');
+      expect(response.headers.location).toBe('https://cdn.example.com/previews/test_10s.mp4');
+    } finally {
+      process.env.ENABLE_AUTH = originalEnableAuth;
+    }
   });
 });

@@ -61,8 +61,12 @@ Manage via `services.msc` or `sc start/stop VODlibraryService`.
 | `DB_DIR` | Database directory | `./data/db` |
 | `VODS_NAME` | Display name for the site | `VODlibrary` |
 | `ENABLE_AUTH` | Enable login page | `false` |
-| `SESSION_KEY` | Password for authentication and share links | |
+| `SESSION_KEY` | Password required to log in | |
+| `SESSION_SECRET` | High-entropy secret used to sign session cookies (required when authentication is enabled) | |
+| `AUTH_COOKIE_SECURE` | Mark auth/share cookies Secure; enable for an HTTPS public site | `false` |
+| `SHARE_TOKEN_SECRET` | High-entropy secret used to sign scoped share tokens | |
 | `SHARE_BASE_URL` | Public URL for share links (e.g. `https://example.com`) | |
+| `SSE_MAX_CLIENTS` | Maximum concurrent live-update connections | `100` |
 | `CACHE_MAX_SIZE` | Server-side video cache size in MB | `500` |
 | `CACHE_TTL` | Cache TTL in seconds | `3600` |
 | `CDN_ENABLED` | Enable CDN integration | `false` |

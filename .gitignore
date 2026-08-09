@@ -43,6 +43,9 @@ jspm_packages/
 # Optional npm cache directory
 .npm
 
+# Native build output
+target/
+
 # Optional eslint cache
 .eslintcache
 

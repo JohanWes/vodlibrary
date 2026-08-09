@@ -1,6 +1,7 @@
 const request = require('supertest');
 const fs = require('fs');
 const { Readable } = require('stream');
+const { issueSessionToken } = require('../../lib/security-tokens');
 
 const FIXED_STREAM_SEGMENT_SIZE = 2 * 1024 * 1024;
 
@@ -53,11 +54,13 @@ describe('Stream route cache behavior', () => {
 
     const response = await request(app)
       .get('/api/videos/1/stream')
-      .set('Cookie', 'auth_token=valid-session')
+      .set('Cookie', `auth_token=${issueSessionToken(process.env.SESSION_SECRET)}`)
       .set('Range', 'bytes=100-199')
       .expect(206);
 
     expect(response.headers['content-length']).toBe('100');
+    expect(response.headers['cache-control']).toBe('private, max-age=3600');
+    expect(mockCdnManager.shouldUseCdn).not.toHaveBeenCalled();
     expect(mockVideoCache.recordAccess).toHaveBeenCalledWith(1, { namespace: 'stream' });
     expect(mockVideoCache.getCachedSegment).toHaveBeenCalledWith(1, 0, {
       namespace: 'stream',
@@ -77,7 +80,7 @@ describe('Stream route cache behavior', () => {
 
     await request(app)
       .get('/api/videos/1/stream')
-      .set('Cookie', 'auth_token=valid-session')
+      .set('Cookie', `auth_token=${issueSessionToken(process.env.SESSION_SECRET)}`)
       .set('Range', `bytes=${start}-${end}`)
       .expect(206);
 

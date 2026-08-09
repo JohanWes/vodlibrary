@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let deathTimestamps = null; // To hold parsed timestamps
   let baseShareUrl = null; // To store the base share URL fetched from API
   
-  const videoId = window.location.pathname.split('/').pop();
+  const videoId = getVideoIdFromPath(window.location.pathname);
   
   const loadingOverlay = document.createElement('div');
   loadingOverlay.className = 'video-loading-overlay';
@@ -49,6 +49,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('click', handleClickOutsidePopover);
   
   /**
+   * Parse the video ID from a watch page path, relative to the document base
+   * @param {string} path - The current window location pathname
+   * @returns {string} - The video ID, or '' if not present
+   */
+  function getVideoIdFromPath(path) {
+    const basePath = appUrl('/');
+    let relativePath = path;
+    if (relativePath.startsWith(basePath)) {
+      relativePath = relativePath.slice(basePath.length);
+    }
+    relativePath = relativePath.replace(/^\/+/, '');
+    return relativePath.split('/').pop() || '';
+  }
+
+  /**
    * Load video details and set up player
    */
   async function loadVideo(id) {
@@ -58,7 +73,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       isLoading = true;
       
       // Fetch video metadata from API
-      const response = await fetch(`/api/videos/${id}`);
+      const response = await fetch(appUrl(`/api/videos/${id}`));
       
       if (!response.ok) {
         throw new Error('Failed to fetch video');
@@ -92,7 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       updateFavoriteButtonState(id);
       
-      videoPlayer.src = `/api/videos/${id}/stream`;
+      videoPlayer.src = appUrl(`/api/videos/${id}/stream`);
       
       initializePlyrPlayer();
     } catch (error) {
@@ -373,7 +388,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (baseShareUrl) return; // Already fetched
     
     try {
-      const response = await fetch(`/api/share/${videoId}`);
+      const response = await fetch(appUrl(`/api/share/${videoId}`));
       if (!response.ok) {
         throw new Error('Failed to generate share link');
       }

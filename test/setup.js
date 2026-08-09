@@ -1,6 +1,9 @@
 // Test setup file
 const path = require('path');
 const fs = require('fs');
+const { TextDecoder, TextEncoder } = require('util');
+global.TextDecoder = TextDecoder;
+global.TextEncoder = TextEncoder;
 
 // Load .env.test before setting hardcoded test variables
 const envFile = path.join(__dirname, '..', '.env.test');
@@ -12,6 +15,9 @@ if (fs.existsSync(envFile)) {
 process.env.NODE_ENV = 'test';
 process.env.VIDEO_LIBRARY = './test-videos';
 process.env.SESSION_KEY = 'test-session-key';
+process.env.SESSION_SECRET = 'test-session-signing-secret';
+process.env.SHARE_TOKEN_SECRET = 'test-share-signing-secret';
+process.env.SHARE_BASE_URL = 'https://example.test';
 process.env.ENABLE_AUTH = 'true';
 process.env.CDN_ENABLED = 'false';
 // Preview settings are now hardcoded in lib/preview.js

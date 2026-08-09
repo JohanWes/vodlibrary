@@ -360,7 +360,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       if (useAdvancedSearch && searchQuery) {
         // Use advanced search endpoint
-        response = await fetch('/api/videos/advanced-search', {
+        response = await fetch(appUrl('/api/videos/advanced-search'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -374,7 +374,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
       } else {
         // Use regular search endpoint
-        let url = `/api/videos?page=${page}&limit=${limit}&sort=${sortBy}`; // Include sort
+        let url = appUrl(`/api/videos?page=${page}&limit=${limit}&sort=${sortBy}`); // Include sort
         if (searchQuery) {
           url += `&search=${encodeURIComponent(searchQuery)}`;
         }
@@ -556,7 +556,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const fetchAndUpdateStatus = async () => {
       try {
-        const response = await fetch('/api/scan/status');
+        const response = await fetch(appUrl('/api/scan/status'));
         if (!response.ok) {
           throw new Error(`Failed to fetch scan status: ${response.status}`);
         }
@@ -658,7 +658,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const isFavorited = VideoUtils.isFavorite(video.id.toString()); // Use VideoUtils explicitly
       // Ensure duration is formatted, using utility if needed
       const durationFormatted = video.duration_formatted || (window.VideoUtils && typeof window.VideoUtils.formatDuration === 'function' ? window.VideoUtils.formatDuration(video.duration) : `${Math.floor(video.duration / 60)}:${(video.duration % 60).toString().padStart(2, '0')}`);
-      const thumbnailSrc = video.thumbnail_path || getPlaceholderThumbnail();
+      const thumbnailSrc = video.thumbnail_path ? appUrl(video.thumbnail_path) : getPlaceholderThumbnail();
       const imageLoading = highPriorityThumbnail ? 'eager' : 'lazy';
       const imageFetchPriority = highPriorityThumbnail ? 'high' : 'auto';
 
@@ -680,27 +680,55 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       // Otherwise, it remains 'neutral'
 
-      let outcomeIndicatorHTML = '';
-      if (outcomeStatus === 'success') {
-          outcomeIndicatorHTML = '<span class="outcome-indicator success"></span>';
-      } else if (outcomeStatus === 'failure') {
-          outcomeIndicatorHTML = '<span class="outcome-indicator failure"></span>';
-      }
-      // --- End Outcome Indicator Logic ---
+      // --- Build card with DOM nodes only (no dynamic HTML interpolation) ---
+      const link = document.createElement('a');
+      link.className = 'video-card-link';
+      link.rel = 'noopener noreferrer';
+      link.href = appUrl(`/watch/${video.id}`);
 
-      videoCard.innerHTML = `
-        <a href="/watch/${video.id}" rel="noopener noreferrer" class="video-card-link">
-            <div class="thumbnail-container">
-              <img class="thumbnail" src="${thumbnailSrc}" alt="${video.title}" loading="${imageLoading}" decoding="async" fetchpriority="${imageFetchPriority}">
-              <div class="duration-badge">${durationFormatted}</div>
-              ${outcomeIndicatorHTML}
-            </div>
-            <div class="video-info">
-              <div class="video-title">${video.title}</div>
-            </div>
-        </a>
-        <span class="favorite-indicator-grid ${isFavorited ? 'favorited' : ''}" data-video-id="${video.id}"></span>
-      `;
+      const thumbnailContainer = document.createElement('div');
+      thumbnailContainer.className = 'thumbnail-container';
+
+      const thumbnailImage = document.createElement('img');
+      thumbnailImage.className = 'thumbnail';
+      thumbnailImage.src = thumbnailSrc;
+      thumbnailImage.alt = video.title;
+      thumbnailImage.setAttribute('loading', imageLoading);
+      thumbnailImage.setAttribute('decoding', 'async');
+      thumbnailImage.setAttribute('fetchpriority', imageFetchPriority);
+
+      const durationBadge = document.createElement('div');
+      durationBadge.className = 'duration-badge';
+      durationBadge.textContent = durationFormatted;
+
+      thumbnailContainer.appendChild(thumbnailImage);
+      thumbnailContainer.appendChild(durationBadge);
+
+      // Static outcome indicator node (class derives from the fixed status logic above)
+      if (outcomeStatus === 'success' || outcomeStatus === 'failure') {
+          const outcomeIndicator = document.createElement('span');
+          outcomeIndicator.className = `outcome-indicator ${outcomeStatus}`;
+          thumbnailContainer.appendChild(outcomeIndicator);
+      }
+
+      const videoInfo = document.createElement('div');
+      videoInfo.className = 'video-info';
+
+      const videoTitle = document.createElement('div');
+      videoTitle.className = 'video-title';
+      videoTitle.textContent = video.title;
+
+      videoInfo.appendChild(videoTitle);
+      link.appendChild(thumbnailContainer);
+      link.appendChild(videoInfo);
+
+      const favoriteIndicator = document.createElement('span');
+      favoriteIndicator.className = `favorite-indicator-grid${isFavorited ? ' favorited' : ''}`;
+      favoriteIndicator.dataset.videoId = video.id;
+
+      videoCard.appendChild(link);
+      videoCard.appendChild(favoriteIndicator);
+      // --- End card build ---
       
       if (animate) {
         videoCard.classList.add('card-enter');
@@ -895,7 +923,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Use POST for the refresh endpoint
-      const response = await fetch('/api/refresh', { method: 'POST' }); 
+      const response = await fetch(appUrl('/api/refresh'), { method: 'POST' }); 
       
       if (!response.ok) {
          // Handle non-2xx responses, e.g., 500 if initiation failed
@@ -936,7 +964,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     console.log('Connecting to SSE endpoint...');
-    sseEventSource = new EventSource('/api/updates');
+    sseEventSource = new EventSource(appUrl('/api/updates'));
 
     sseEventSource.onopen = () => {
       console.log('SSE connection established.');
@@ -1280,8 +1308,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     resetOverlayTransformVariables(overlay);
     document.body.classList.remove('overlay-open');
 
-    if (updateHistory && window.location.pathname !== '/') {
-      history.pushState({}, '', '/');
+    if (updateHistory && window.location.pathname !== appUrl('/')) {
+      history.pushState({}, '', appUrl('/'));
     }
 
     // Reset page title
@@ -1317,7 +1345,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       // Update URL
       if (updateHistory) {
-        const newUrl = `/watch/${videoId}`;
+        const newUrl = appUrl(`/watch/${videoId}`);
         history.pushState({ videoOverlay: true, videoId }, '', newUrl);
       }
 
@@ -1327,7 +1355,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Load video metadata
-      const response = await fetch(`/api/videos/${videoId}`);
+      const response = await fetch(appUrl(`/api/videos/${videoId}`));
       if (!response.ok) {
         throw new Error('Failed to fetch video');
       }
@@ -1349,7 +1377,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       document.title = `${vodsName} - ${video.title}`;
       
       // Initialize video player
-      overlayVideo.src = `/api/videos/${videoId}/stream`;
+      overlayVideo.src = appUrl(`/api/videos/${videoId}/stream`);
 
       const removeLoadingOverlay = () => {
         if (loadingOverlay.parentNode) {
@@ -1713,15 +1741,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
   
   /**
+   * Extract a video ID from a watch page path, relative to the document base
+   * @param {string} path - The current window location pathname
+   * @returns {string|null} - The video ID, or null if the path is not a watch path
+   */
+  function getWatchVideoIdFromPath(path) {
+    const basePath = appUrl('/');
+    let relativePath = path;
+    if (relativePath.startsWith(basePath)) {
+      relativePath = relativePath.slice(basePath.length);
+    }
+    relativePath = relativePath.replace(/^\/+/, '');
+    const match = relativePath.match(/^watch\/(\d+)$/);
+    return match ? match[1] : null;
+  }
+
+  /**
    * Handle browser back/forward navigation
    */
   function handleOverlayPopState(event) {
-    const currentPath = window.location.pathname;
-    const watchMatch = currentPath.match(/^\/watch\/(\d+)$/);
+    const videoId = getWatchVideoIdFromPath(window.location.pathname);
     
-    if (watchMatch) {
+    if (videoId) {
       // URL indicates we should show overlay
-      const videoId = watchMatch[1];
       if (!overlayCurrentVideoId || overlayCurrentVideoId !== videoId) {
         openVideoOverlay(videoId, null, { updateHistory: false });
       }
@@ -1799,7 +1841,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (overlayBaseShareUrl || !overlayCurrentVideoId) return;
     
     try {
-      const response = await fetch(`/api/share/${overlayCurrentVideoId}`);
+      const response = await fetch(appUrl(`/api/share/${overlayCurrentVideoId}`));
       if (!response.ok) {
         throw new Error('Failed to generate share link');
       }
@@ -1889,13 +1931,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   initializeGsapSmoothScroll(); // Keep native scroll behavior
   
   // Handle direct URL navigation to video overlay
-  const currentPath = window.location.pathname;
-  const watchMatch = currentPath.match(/^\/watch\/(\d+)$/);
-  if (watchMatch) {
-    const videoId = watchMatch[1];
+  const videoIdFromPath = getWatchVideoIdFromPath(window.location.pathname);
+  if (videoIdFromPath) {
     // Wait for page to load before opening overlay
     setTimeout(() => {
-      openVideoOverlay(videoId, null, { updateHistory: false });
+      openVideoOverlay(videoIdFromPath, null, { updateHistory: false });
     }, 500);
   }
 

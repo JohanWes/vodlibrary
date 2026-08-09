@@ -3,6 +3,19 @@
  * Manages video element pooling, preview loading, and memory optimization
  */
 
+/**
+ * Resolve API URLs beneath the document base href.
+ * Falls back to the raw path when VideoUtils is unavailable (e.g. tests).
+ * @param {string} path - Application path to resolve
+ * @returns {string} - Root-relative URL resolved against the document base
+ */
+function resolveAppUrl(path) {
+  if (typeof window !== 'undefined' && window.VideoUtils && typeof window.VideoUtils.appUrl === 'function') {
+    return window.VideoUtils.appUrl(path);
+  }
+  return path;
+}
+
 class VideoPreviewManager {
   constructor() {
     this.videoPool = [];
@@ -14,8 +27,10 @@ class VideoPreviewManager {
     this.hoverTimeouts = new Map(); // Track hover timeouts
     this.HOVER_DELAY = 300; // 300ms delay before showing preview
     
-    this.isSuspended = false;
-
+    this.isSuspended = false;
+
+
+
     // Performance monitoring
     this.performanceMetrics = {
       totalPreviews: 0,
@@ -170,7 +185,7 @@ class VideoPreviewManager {
 
     try {
       const startTime = performance.now();
-      const apiUrl = `/api/videos/${videoId}/preview-info`;
+      const apiUrl = resolveAppUrl(`/api/videos/${videoId}/preview-info`);
       this.debugLog(`[VideoPreview] Fetching preview info from: ${apiUrl}`);
       
       const response = await fetch(apiUrl);
@@ -263,7 +278,7 @@ class VideoPreviewManager {
         this.debugLog(`[VideoPreview] Loading clip for video ${videoId}:`, firstClip);
         
         // Use the API endpoint to serve the preview clip
-        const videoSrc = `/api/videos/${videoId}/preview/${firstClip.timestamp}`;
+        const videoSrc = resolveAppUrl(`/api/videos/${videoId}/preview/${firstClip.timestamp}`);
         this.debugLog(`[VideoPreview] Setting video src to API endpoint: ${videoSrc}`);
         this.debugLog(`[VideoPreview] Original clip path was: ${firstClip.path}`);
         video.src = videoSrc;
