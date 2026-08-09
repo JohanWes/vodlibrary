@@ -1,6 +1,6 @@
 #!/bin/bash
 # VODlibrary Startup Script for KDE Autostart
-cd /home/johanw/Old_Windows_Stuff/Repos/VODlibrary
+cd /home/johanw/repos/VODlibrary
 
 # Log start time
 echo "Starting VODlibrary at $(date)" >> server.log

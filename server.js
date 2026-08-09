@@ -611,7 +611,7 @@ async function startServer() {
     const watcherState = setupLibraryWatcher(db);
     app.locals.watcherState = watcherState;
 
-    const server = app.listen(port, '0.0.0.0', () => {
+    const server = app.listen({ port, host: '::', ipv6Only: false }, () => {
       console.log('Video server running at:');
       console.log(`- Local: http://localhost:${port}${basePath}`);
       console.log(`- Public: http://${publicIp}:${port}${basePath}`);
