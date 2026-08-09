@@ -14,18 +14,11 @@ const mockCdnManager = {
   getCdnUrl: jest.fn()
 };
 
-const mockVideoCache = {
-  recordAccess: jest.fn(),
-  getCachedSegment: jest.fn(),
-  cacheSegmentFromFile: jest.fn().mockResolvedValue(true)
-};
-
 jest.mock('../../db/database', () => ({
   getVideoById: jest.fn()
 }));
 
 jest.mock('../../lib/cdn', () => mockCdnManager);
-jest.mock('../../lib/cache', () => mockVideoCache);
 
 describe('Public Preview API Endpoints', () => {
   let app;
@@ -154,55 +147,6 @@ describe('Public Preview API Endpoints', () => {
         .expect(404);
 
       expect(response.body.error).toBe('Preview file not found');
-    });
-  });
-
-  describe('GET /api/videos/:id/segments/:segmentNumber', () => {
-    test('uses quality-sized segments with cache namespace isolation', async () => {
-      const { getVideoById } = require('../../db/database');
-      getVideoById.mockResolvedValue(testVideoData);
-      fs.promises.stat.mockResolvedValue({ size: 10485760 });
-
-      const response = await request(app)
-        .get('/api/videos/1/segments/0?quality=low')
-        .expect(206);
-
-      expect(response.headers['content-length']).toBe('524288');
-      expect(mockVideoCache.recordAccess).toHaveBeenCalledWith('1', {
-        namespace: 'preview-segment'
-      });
-      expect(mockVideoCache.getCachedSegment).toHaveBeenCalledWith('1', 0, {
-        namespace: 'preview-segment',
-        quality: 'low',
-        startByte: 0,
-        endByte: 524287
-      });
-    });
-
-    test('serves cached segment when exact match exists', async () => {
-      const { getVideoById } = require('../../db/database');
-      getVideoById.mockResolvedValue(testVideoData);
-      fs.promises.stat.mockResolvedValue({ size: 10485760 });
-
-      mockVideoCache.getCachedSegment.mockReturnValue(Buffer.alloc(524288));
-
-      await request(app)
-        .get('/api/videos/1/segments/0?quality=low')
-        .expect(206);
-
-      expect(mockVideoCache.cacheSegmentFromFile).not.toHaveBeenCalled();
-    });
-
-    test('returns 416 for out-of-range segment', async () => {
-      const { getVideoById } = require('../../db/database');
-      getVideoById.mockResolvedValue(testVideoData);
-      fs.promises.stat.mockResolvedValue({ size: 1024 });
-
-      const response = await request(app)
-        .get('/api/videos/1/segments/10?quality=low')
-        .expect(416);
-
-      expect(response.body.error).toBe('Requested segment beyond file size');
     });
   });
 });

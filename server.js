@@ -1,10 +1,15 @@
 // Express server with API endpoints for the video sharing/viewing software
-require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+
+// Load .env before requiring modules that read environment variables
+const envFile = path.join(__dirname, '.env');
+if (fs.existsSync(envFile)) {
+  process.loadEnvFile(envFile);
+}
 
 const express = require('express');
 const cookieParser = require('cookie-parser');
-const path = require('path');
-const fs = require('fs');
 const chokidar = require('chokidar');
 
 const {

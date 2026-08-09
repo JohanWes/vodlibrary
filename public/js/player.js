@@ -5,14 +5,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Add utility styles
   addUtilStyles();
   
-  // Initialize video preloader
-  try {
-    await window.VideoPreloader.init();
-    console.log('Video preloader initialized successfully');
-  } catch (error) {
-    console.warn('Failed to initialize video preloader:', error);
-  }
-  
   // Get the dynamic VODs name and update page elements
   const vodsName = await getVODsName();
   document.getElementById('app-title').textContent = vodsName;
@@ -65,58 +57,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     try {
       isLoading = true;
       
-      const cacheApiAvailable = typeof caches !== 'undefined';
+      // Fetch video metadata from API
+      const response = await fetch(`/api/videos/${id}`);
       
-      // Add a message if Cache API is not available
-      if (!cacheApiAvailable) {
-        console.log('Cache API not available, using limited preloading functionality');
-        
-        document.body.classList.add('limited-preloading');
-        
-        const infoMessage = document.createElement('div');
-        infoMessage.className = 'preload-info-message';
-        infoMessage.textContent = 'Limited preloading available in this browser';
-        document.querySelector('.video-info').appendChild(infoMessage);
-        
-        const style = document.createElement('style');
-        style.textContent = `
-          .preload-info-message {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 10px;
-            padding: 4px 8px;
-            background-color: rgba(92, 108, 255, 0.1);
-            border-radius: var(--radius-sm);
-            display: inline-block;
-          }
-        `;
-        document.head.appendChild(style);
+      if (!response.ok) {
+        throw new Error('Failed to fetch video');
       }
       
-      let video = null;
-      try {
-        video = await window.VideoPreloader.getCachedMetadata(id);
-      } catch (error) {
-        console.warn('Error getting cached metadata:', error);
-      }
-      
-      if (!video) {
-        // If no cached metadata, fetch from API
-        const response = await fetch(`/api/videos/${id}`);
-        
-        if (!response.ok) {
-          throw new Error('Failed to fetch video');
-        }
-        
-        video = await response.json();
-        
-        // Cache the metadata for future use
-        try {
-          await window.VideoPreloader.cacheVideoMetadata(id, video);
-        } catch (error) {
-          console.warn('Error caching video metadata:', error);
-        }
-      }
+      const video = await response.json();
       
       document.title = `${vodsName} - ${video.title}`;
       videoTitle.textContent = video.title;
@@ -144,54 +92,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       
       updateFavoriteButtonState(id);
       
-      let hasPreloadedSegment = false;
-      try {
-        hasPreloadedSegment = await window.VideoPreloader.isSegmentCached(id, 0);
-      } catch (error) {
-        console.warn('Error checking for cached segments:', error);
-      }
-      
-      if (hasPreloadedSegment) {
-        console.log('Using preloaded segment for faster startup');
-      }
-      
       videoPlayer.src = `/api/videos/${id}/stream`;
       
       initializePlyrPlayer();
-      
-      preloadAdditionalSegments(id);
     } catch (error) {
       console.error('Error loading video:', error);
       showToast('Failed to load video. Please try again.', 'error');
     } finally {
       isLoading = false;
-    }
-  }
-  
-  /**
-   * Preload additional segments for smoother playback
-   * @param {number} videoId - The ID of the video
-   */
-  async function preloadAdditionalSegments(videoId) {
-    try {
-      const cacheApiAvailable = typeof caches !== 'undefined';
-      
-      if (!cacheApiAvailable) {
-        // If Cache API is not available, we'll still make the requests
-        // to warm up the browser's HTTP cache, but we won't try to store them
-        console.log('Cache API not available, using browser cache for preloading');
-      }
-      
-      // Preload segments 1-3 (segment 0 should already be loaded)
-      for (let i = 1; i <= 3; i++) {
-        try {
-          await window.VideoPreloader.preloadSegment(videoId, i);
-        } catch (error) {
-          console.warn(`Error preloading segment ${i}:`, error);
-        }
-      }
-    } catch (error) {
-      console.warn('Error preloading additional segments:', error);
     }
   }
   

@@ -15,14 +15,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('Failed to initialize video preview manager:', error);
   }
   
-  // Initialize video preloader
-  try {
-    await window.VideoPreloader.init();
-    console.log('Video preloader initialized successfully');
-  } catch (error) {
-    console.warn('Failed to initialize video preloader:', error);
-  }
-  
   // Get the dynamic VODs name and update page elements
   const vodsName = await getVODsName();
   document.title = vodsName;
@@ -77,7 +69,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   let hasScanRunThisSession = false; // Flag to track if scan initiated in this session
   let pendingPage = null; // Track in-flight pagination requests
   let infiniteScrollObserver = null;
-  let preloadObserver = null;
   let overlayOpenTransitionCleanup = null;
   let overlayCloseTransitionCleanup = null;
   let overlayTransitionNonce = 0;
@@ -718,11 +709,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, { once: true });
       }
 
-      // Cache metadata using the preloader utility if available
-      if (window.VideoPreloader && typeof window.VideoPreloader.cacheVideoMetadata === 'function') {
-         window.VideoPreloader.cacheVideoMetadata(video.id, video);
-      }
-
       // Add preview functionality if preview manager is available
       if (videoPreviewManager) {
         videoPreviewManager.attachPreviewListeners(videoCard, video.id.toString());
@@ -788,7 +774,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       });
 
       videosGrid.appendChild(fragment);
-      setupPreloading(); // Setup preloading for newly added cards
 
       if (start + chunkSize < displayedVideos.length) {
         await nextFrame();
@@ -798,59 +783,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateInfiniteScrollObserverState();
   }
   
-  /**
-   * Set up preloading for video cards currently in the DOM
-   */
-  function setupPreloading() {
-    const videoCards = videosGrid.querySelectorAll('.video-card:not(.preload-observed)'); // Select only cards not yet observed
-    
-    if (videoCards.length === 0) return; // No new cards to setup
-
-    const cacheApiAvailable = typeof caches !== 'undefined';
-    
-    if (!cacheApiAvailable && !document.body.classList.contains('limited-preloading')) {
-      console.log('Cache API not available, using limited preloading functionality');
-      document.body.classList.add('limited-preloading');
-      if (!document.querySelector('.preload-info-message')) {
-        const infoMessage = document.createElement('div');
-        infoMessage.className = 'preload-info-message';
-        infoMessage.textContent = 'Limited preloading available in this browser';
-        document.querySelector('.videos-header').appendChild(infoMessage);
-      }
-    }
-
-    if (!preloadObserver) {
-      preloadObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-          if (entry.isIntersecting) {
-            const videoId = entry.target.dataset.id;
-            if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegment === 'function') {
-              window.VideoPreloader.preloadSegment(videoId, 0, 'low')
-                .then(success => { if (success) entry.target.classList.add('preloaded'); })
-                .catch(error => { console.warn(`Error preloading segment 0 for video ${videoId}:`, error); });
-            }
-            preloadObserver.unobserve(entry.target); // Preload only once on intersection
-          }
-        });
-      }, { rootMargin: '200px', threshold: 0.1 });
-    }
-
-    const debouncedPreload = debounce((cardElement, id) => {
-      if (window.VideoPreloader && typeof window.VideoPreloader.preloadSegments === 'function') {
-        window.VideoPreloader.preloadSegments(id, 2, 'low') // Preload first 2 segments on hover
-          .then(results => { if (results && results.some(success => success)) cardElement.classList.add('preloaded'); })
-          .catch(error => { console.warn(`Error preloading segments on hover for video ${id}:`, error); });
-      }
-    }, 300); // 300ms debounce delay
-
-    videoCards.forEach(card => {
-      const videoId = card.dataset.id;
-      card.addEventListener('mouseenter', () => debouncedPreload(card, videoId));
-      preloadObserver.observe(card);
-      card.classList.add('preload-observed'); // Mark card as observed
-    });
-  }
-
   function loadNextPageIfNeeded() {
     if (isLoading || currentPage >= totalPages) {
       return;
@@ -1066,8 +998,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
     videosGrid.prepend(videoCard); // Add to the beginning of the grid
 
-    // Setup preloading for the new card
-    setupPreloading();
     updateInfiniteScrollObserverState();
 
     // Remove "No videos found" message if it exists
@@ -1397,27 +1327,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       // Load video metadata
-      let video = null;
-      try {
-        video = await window.VideoPreloader.getCachedMetadata(videoId);
-      } catch (error) {
-        console.warn('Error getting cached metadata:', error);
+      const response = await fetch(`/api/videos/${videoId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch video');
       }
-      
-      if (!video) {
-        const response = await fetch(`/api/videos/${videoId}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch video');
-        }
-        video = await response.json();
-        
-        // Cache for future use
-        try {
-          await window.VideoPreloader.cacheVideoMetadata(videoId, video);
-        } catch (error) {
-          console.warn('Error caching video metadata:', error);
-        }
-      }
+      const video = await response.json();
       
       // Store current video data
       overlayCurrentVideoId = videoId;
@@ -1481,9 +1395,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       setTimeout(() => {
         document.querySelector('.video-overlay-close').focus();
       }, 100);
-      
-      // Preload additional segments (conditional based on performance)
-      preloadOverlaySegments(videoId, overlayVideo);
       
     } catch (error) {
       console.error('Error opening video overlay:', error);
@@ -1798,55 +1709,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (gridIndicator) {
         gridIndicator.classList.toggle('favorited', isNowFavorited);
       }
-    }
-  }
-  
-  /**
-   * Preload segments for overlay video (conditional based on performance)
-   * @param {string} videoId - Video ID
-   * @param {HTMLVideoElement} videoElement - Video element to check buffering state
-   */
-  async function preloadOverlaySegments(videoId, videoElement = null) {
-    try {
-      // Skip preloading if FPS is poor (system under stress)
-      if (overlayFPSMonitor && overlayFPSMonitor.sampleCount >= 2) {
-        const avgFPS = overlayFPSMonitor.totalFPS / overlayFPSMonitor.sampleCount;
-        if (avgFPS < 40) {
-          console.log(`[Performance] Skipping segment preloading - poor FPS (${Math.round(avgFPS)})`);
-          return;
-        }
-      }
-
-      // Check if video is actually buffering/needs preloading
-      if (videoElement) {
-        const buffered = videoElement.buffered;
-        const currentTime = videoElement.currentTime;
-        const duration = videoElement.duration;
-
-        // If we have good buffering ahead, skip preloading
-        if (buffered.length > 0) {
-          const bufferedEnd = buffered.end(buffered.length - 1);
-          const bufferedAhead = bufferedEnd - currentTime;
-
-          if (bufferedAhead > 30 || bufferedEnd >= duration * 0.8) {
-            console.log(`[Performance] Skipping segment preloading - sufficient buffer (${Math.round(bufferedAhead)}s ahead)`);
-            return;
-          }
-        }
-      }
-
-      if (window.VideoPreloader) {
-        console.log('[Performance] Starting conditional segment preloading');
-        for (let i = 1; i <= 3; i++) {
-          try {
-            await window.VideoPreloader.preloadSegment(videoId, i);
-          } catch (error) {
-            console.warn(`Error preloading segment ${i}:`, error);
-          }
-        }
-      }
-    } catch (error) {
-      console.warn('Error preloading overlay segments:', error);
     }
   }
   

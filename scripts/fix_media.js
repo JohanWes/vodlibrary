@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+
+// Load root .env if present before requiring modules that read environment variables
+const envFile = path.join(__dirname, '..', '.env');
+if (fs.existsSync(envFile)) {
+  process.loadEnvFile(envFile);
+}
+
 const { initializeDatabase, getAllVideoPaths, getVideoById, updateVideoThumbnail, updateVideoPreview, updateVideo } = require('../db/database');
 const { generateThumbnail, thumbnailExists } = require('../lib/thumbnail');
 const { generatePreviewClips, previewsExist, getConfig: getPreviewConfig } = require('../lib/preview');

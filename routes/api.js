@@ -4,8 +4,6 @@ const router = express.Router();
 const { scanLibrary, getScanStatus } = require('../lib/scanner'); 
 // Import getVideosPaginated instead of getAllVideos
 const { getVideosPaginated, getVideoById, getVideosWithMetadata } = require('../db/database'); 
-const videoCache = require('../lib/cache');
-const cdnManager = require('../lib/cdn');
 const OpenRouterClient = require('../lib/llm');
 
 // Helper function to format duration in seconds to MM:SS format
@@ -216,65 +214,6 @@ router.get('/scan/status', (req, res) => {
   } catch (error) {
     console.error('Error fetching scan status:', error);
     res.status(500).json({ error: 'Failed to fetch scan status' });
-  }
-});
-
-
-router.get('/cache/stats', (req, res) => {
-  try {
-    const stats = videoCache.getCacheStats();
-    res.json(stats);
-  } catch (error) {
-    console.error('Error getting cache stats:', error);
-    res.status(500).json({ error: 'Failed to get cache stats' });
-  }
-});
-
-router.post('/cache/clear', (req, res) => {
-  try {
-    videoCache.clearCache();
-    res.json({ message: 'Cache cleared successfully' });
-  } catch (error) {
-    console.error('Error clearing cache:', error);
-    res.status(500).json({ error: 'Failed to clear cache' });
-  }
-});
-
-router.post('/cache/config', (req, res) => {
-  try {
-    const newConfig = req.body;
-    videoCache.updateConfig(newConfig);
-    res.json({ 
-      message: 'Cache configuration updated successfully',
-      config: videoCache.config
-    });
-  } catch (error) {
-    console.error('Error updating cache config:', error);
-    res.status(500).json({ error: 'Failed to update cache config' });
-  }
-});
-
-router.get('/cdn/config', (req, res) => {
-  try {
-    const config = cdnManager.getConfig();
-    res.json(config);
-  } catch (error) {
-    console.error('Error getting CDN config:', error);
-    res.status(500).json({ error: 'Failed to get CDN config' });
-  }
-});
-
-router.post('/cdn/config', (req, res) => {
-  try {
-    const newConfig = req.body;
-    const updatedConfig = cdnManager.updateConfig(newConfig);
-    res.json({
-      message: 'CDN configuration updated successfully',
-      config: updatedConfig
-    });
-  } catch (error) {
-    console.error('Error updating CDN config:', error);
-    res.status(500).json({ error: 'Failed to update CDN config' });
   }
 });
 

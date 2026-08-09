@@ -47,7 +47,7 @@ describe('Public Preview Auth + CDN Integration', () => {
     app.use('/api', publicApiRoutes);
 
     app.use('/api', (req, res, next) => {
-      if (req.path.startsWith('/videos/') && (req.path.includes('/preview') || req.path.includes('/segments/'))) {
+      if (req.path.startsWith('/videos/') && req.path.includes('/preview')) {
         return next();
       }
 
@@ -86,17 +86,6 @@ describe('Public Preview Auth + CDN Integration', () => {
       .expect(200);
 
     expect(response.headers['content-type']).toContain('video/mp4');
-  });
-
-  test('keeps segments endpoint public without auth cookie', async () => {
-    const { getVideoById } = require('../../db/database');
-    getVideoById.mockResolvedValue(testVideoData);
-
-    const response = await request(app)
-      .get('/api/videos/1/segments/0?quality=low')
-      .expect(206);
-
-    expect(response.headers['accept-ranges']).toBe('bytes');
   });
 
   test('still protects non-preview API endpoints', async () => {

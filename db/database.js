@@ -262,21 +262,6 @@ function updateVideoPreview(db, id, preview_clips, preview_generation_status, pr
 }
 
 /**
- * Delete all videos from the database
- */
-function clearVideos(db) {
-  return new Promise((resolve, reject) => {
-    db.run('DELETE FROM videos', function(err) {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(this.changes);
-    });
-  });
-}
-
-/**
  * Check if a video exists in the database by path
  */
 function getVideoByPath(db, path) {
@@ -365,7 +350,6 @@ module.exports = {
   addVideo,
   updateVideoThumbnail,
   updateVideoPreview,
-  clearVideos,
   getVideoByPath,
   updateVideo,
   getAllVideoPaths,

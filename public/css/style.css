@@ -639,16 +639,6 @@ select option:hover, select option:focus {
   visibility: hidden;
 }
 
-.preload-info-message {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-left: 10px;
-  padding: 4px 8px;
-  background-color: rgba(92, 108, 255, 0.1);
-  border-radius: var(--radius-sm);
-  display: inline-block;
-}
-
 .video-card {
   background: var(--gradient-secondary);
   border-radius: var(--radius-lg);

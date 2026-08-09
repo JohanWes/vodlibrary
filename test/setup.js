@@ -1,5 +1,12 @@
 // Test setup file
-require('dotenv').config({ path: '.env.test' });
+const path = require('path');
+const fs = require('fs');
+
+// Load .env.test before setting hardcoded test variables
+const envFile = path.join(__dirname, '..', '.env.test');
+if (fs.existsSync(envFile)) {
+  process.loadEnvFile(envFile);
+}
 
 // Mock environment variables for testing
 process.env.NODE_ENV = 'test';
@@ -36,7 +43,14 @@ jest.mock('fluent-ffmpeg', () => {
     run: jest.fn()
   }));
   
-  mockFfmpeg.setFfmpegPath = jest.fn();
+  mockFfmpeg.ffprobe = jest.fn((filePath, callback) => {
+    callback(null, {
+      format: { duration: 120 },
+      streams: [
+        { codec_type: 'video', width: 1920, height: 1080 }
+      ]
+    });
+  });
   return mockFfmpeg;
 });
 
@@ -53,7 +67,6 @@ jest.mock('../db/database', () => ({
   updateVideoPreview: jest.fn(),
   updateVideoThumbnail: jest.fn(),
   getAllVideos: jest.fn(),
-  clearVideos: jest.fn(),
   getVideoByPath: jest.fn(),
   getAllVideoPaths: jest.fn(),
   deleteVideo: jest.fn(),

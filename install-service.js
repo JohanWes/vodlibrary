@@ -15,7 +15,7 @@ const svc = new Service({
   // Set the working directory to the project root
   workingDirectory: __dirname,
   // Optional: Set environment variables if needed directly by the service wrapper
-  // (server.js should handle dotenv loading itself)
+  // (server.js loads .env itself)
   // env: [
   //   {
   //     name: "NODE_ENV",

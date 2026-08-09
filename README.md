@@ -16,7 +16,7 @@ A self-hosted video library for browsing, streaming, and sharing video clips. Sc
 
 ### Prerequisites
 
-- Node.js
+- Node.js 22 or newer
 - FFmpeg and ffprobe in your PATH
 
 ### Installation
