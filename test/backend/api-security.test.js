@@ -7,7 +7,8 @@ const { verifyShareToken, issueShareToken } = require('../../lib/security-tokens
 jest.mock('../../db/database', () => ({
   getVideosPaginated: jest.fn(),
   getVideoById: jest.fn(),
-  getVideosWithMetadata: jest.fn()
+  getVideosWithMetadata: jest.fn(),
+  getVideosByIds: jest.fn()
 }));
 
 jest.mock('../../lib/llm', () => {
@@ -24,7 +25,7 @@ jest.mock('../../lib/llm', () => {
   return MockOpenRouterClient;
 });
 
-const { getVideosPaginated, getVideoById, getVideosWithMetadata } = require('../../db/database');
+const { getVideosPaginated, getVideoById, getVideosWithMetadata, getVideosByIds } = require('../../db/database');
 const OpenRouterClient = require('../../lib/llm');
 const apiRoutes = require('../../routes/api');
 
@@ -69,6 +70,7 @@ describe('API security and validation', () => {
     getVideosPaginated.mockResolvedValue({ videos: [], totalCount: 0 });
     getVideoById.mockResolvedValue(null);
     getVideosWithMetadata.mockResolvedValue([]);
+    getVideosByIds.mockResolvedValue([]);
     OpenRouterClient.isAvailableMock.mockReturnValue(true);
     OpenRouterClient.searchVideosMock.mockResolvedValue([]);
     app = buildApp();
@@ -244,7 +246,7 @@ describe('API security and validation', () => {
     test('projects only safe cards and drops untrusted LLM fields', async () => {
       const metadataRows = [{ id: 42, metadata: '{"start": "2026-08-01T00:00:00Z"}' }];
       getVideosWithMetadata.mockResolvedValue(metadataRows);
-      getVideoById.mockResolvedValue(fullRow);
+      getVideosByIds.mockResolvedValue([fullRow]);
       OpenRouterClient.searchVideosMock.mockResolvedValue([
         { id: 42, searchReason: 'best match', path: '/llm/hallucinated.mp4', evil: 'injected' }
       ]);
@@ -266,7 +268,7 @@ describe('API security and validation', () => {
     });
 
     test('skips matches that cannot be enriched instead of leaking LLM objects', async () => {
-      getVideoById.mockResolvedValue(null);
+      getVideosByIds.mockResolvedValue([]);
       getVideosWithMetadata.mockResolvedValue([{ id: 999, metadata: '{}' }]);
       OpenRouterClient.searchVideosMock.mockResolvedValue([
         { id: 999, path: '/llm/fake.mp4', evil: 'injected' }
@@ -278,8 +280,8 @@ describe('API security and validation', () => {
         .expect(200);
 
       expect(response.body.videos).toEqual([]);
-      expect(response.body.totalCount).toBe(0);
-      expect(getVideoById).toHaveBeenCalledWith(app.locals.db, 999);
+      expect(response.body.totalCount).toBe(1);
+      expect(getVideosByIds).toHaveBeenCalledWith(app.locals.db, [999]);
     });
 
     test('paginates enriched results', async () => {
@@ -289,8 +291,15 @@ describe('API security and validation', () => {
         3: { id: 3, title: 'Three', path: '/mnt/3.mp4' }
       };
       getVideosWithMetadata.mockResolvedValue(Object.keys(rows).map((id) => ({ id: Number(id), metadata: '{}' })));
-      getVideoById.mockImplementation((_db, id) => Promise.resolve(rows[id] || null));
-      OpenRouterClient.searchVideosMock.mockResolvedValue([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      getVideosByIds.mockResolvedValue([rows[3]]);
+      OpenRouterClient.searchVideosMock.mockResolvedValue([
+        { id: 1 },
+        { id: 2 },
+        { id: 2 },
+        { id: '3' },
+        { id: '03' },
+        { id: -1 }
+      ]);
 
       const response = await request(app)
         .post('/api/videos/advanced-search')
@@ -301,6 +310,8 @@ describe('API security and validation', () => {
       expect(response.body.totalCount).toBe(3);
       expect(response.body.page).toBe(2);
       expect(response.body.limit).toBe(2);
+      expect(getVideosByIds).toHaveBeenCalledTimes(1);
+      expect(getVideosByIds).toHaveBeenCalledWith(app.locals.db, [3]);
     });
   });
 

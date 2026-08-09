@@ -3,7 +3,7 @@ const router = express.Router();
 // Import scanLibrary and getScanStatus
 const { scanLibrary, getScanStatus } = require('../lib/scanner');
 // Import getVideosPaginated instead of getAllVideos
-const { getVideosPaginated, getVideoById, getVideosWithMetadata } = require('../db/database');
+const { getVideosPaginated, getVideoById, getVideosWithMetadata, getVideosByIds } = require('../db/database');
 const OpenRouterClient = require('../lib/llm');
 const { toVideoCard, toVideoDetail } = require('../lib/client-video');
 const { issueShareToken } = require('../lib/security-tokens');
@@ -126,26 +126,29 @@ router.post('/videos/advanced-search', async (req, res) => {
     // Use LLM to search
     const matchedVideos = await llmClient.searchVideos(query, videosWithMetadata);
 
-    // Enrich LLM results with safe card projections. Never spread the
-    // untrusted LLM object: only its video id is used to look up a real row.
-    const enrichedVideos = [];
+    // Treat model output as untrusted and preserve its stable result order.
+    const matchedIds = [];
+    const seenIds = new Set();
     for (const matchedVideo of matchedVideos) {
-      try {
-        // Fetch complete video record using existing getVideoById function
-        const completeVideo = await getVideoById(db, matchedVideo.id);
-        if (completeVideo) {
-          enrichedVideos.push(toVideoCard(completeVideo));
-        }
-      } catch (error) {
-        console.warn(`Failed to enrich video ${matchedVideo.id}:`, error);
+      const rawId = matchedVideo && matchedVideo.id;
+      const id = Number.isSafeInteger(rawId) && rawId > 0
+        ? rawId
+        : parsePositiveIntParam(rawId);
+      if (id !== null && !seenIds.has(id)) {
+        seenIds.add(id);
+        matchedIds.push(id);
       }
     }
 
-    // Paginate enriched results
-    const totalCount = enrichedVideos.length;
+    const totalCount = matchedIds.length;
     const startIndex = (page - 1) * limit;
-    const endIndex = startIndex + limit;
-    const paginatedVideos = enrichedVideos.slice(startIndex, endIndex);
+    const pageIds = matchedIds.slice(startIndex, startIndex + limit);
+    const pageRows = await getVideosByIds(db, pageIds);
+    const rowsById = new Map(pageRows.map((video) => [String(video.id), video]));
+    const paginatedVideos = pageIds
+      .map((id) => rowsById.get(String(id)))
+      .filter(Boolean)
+      .map(toVideoCard);
 
     res.json({
       videos: paginatedVideos,

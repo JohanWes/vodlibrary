@@ -76,5 +76,7 @@ jest.mock('../db/database', () => ({
   getVideoByPath: jest.fn(),
   getAllVideoPaths: jest.fn(),
   deleteVideo: jest.fn(),
-  getVideosPaginated: jest.fn().mockResolvedValue({ videos: [], totalCount: 0 })
+  getVideosPaginated: jest.fn().mockResolvedValue({ videos: [], totalCount: 0 }),
+  getVideosWithMetadata: jest.fn().mockResolvedValue([]),
+  getVideosByIds: jest.fn().mockResolvedValue([])
 }));

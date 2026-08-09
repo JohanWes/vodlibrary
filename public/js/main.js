@@ -15,11 +15,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     console.warn('Failed to initialize video preview manager:', error);
   }
   
-  // Get the dynamic VODs name and update page elements
-  const vodsName = await getVODsName();
-  document.title = vodsName;
-  document.getElementById('app-title').textContent = vodsName;
-  document.getElementById('footer-text').textContent = `© ${vodsName} - A simple VOD sharing system`;
+  const vodsNamePromise = getVODsName();
+  let vodsName = 'VODlibrary';
   
   // DOM Elements
   const videosGrid = document.getElementById('videos-grid');
@@ -65,6 +62,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let totalVideos = 0;
   let currentAbortController = null; // To cancel ongoing fetch requests
   let scanPollingInterval = null; // Interval ID for scan status polling
+  let scanPollGeneration = 0;
   let sseEventSource = null; // Variable to hold the EventSource instance
   let hasScanRunThisSession = false; // Flag to track if scan initiated in this session
   let pendingPage = null; // Track in-flight pagination requests
@@ -527,19 +525,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     scanStatusElement.textContent = statusText;
     scanStatusElement.className = `scan-status ${statusClass}`; // Update class for styling
 
-    // Stop polling if completed or failed
-    if ((statusData.status === 'completed' || statusData.status === 'failed') && scanPollingInterval) {
-      clearInterval(scanPollingInterval);
-      scanPollingInterval = null;
-      console.log(`Scan status polling stopped (${statusData.status}).`);
-      // Optionally reload videos after a successful scan completes
-      if (statusData.status === 'completed') {
-          showToast('Scan complete. Reloading video list...');
-          setTimeout(() => {
-              currentPage = 1;
-              loadVideos(currentPage, false);
-          }, 1500); // Short delay before reloading
-      }
+    if (statusData.status === 'completed') {
+      showToast('Scan complete. Reloading video list...');
+      setTimeout(() => {
+        currentPage = 1;
+        loadVideos(currentPage, false);
+      }, 1500);
     }
   }
 
@@ -548,11 +539,21 @@ document.addEventListener('DOMContentLoaded', async () => {
    */
   async function pollScanStatus() {
     if (scanPollingInterval) {
-      // Already polling
       return;
     }
 
+    const generation = ++scanPollGeneration;
     console.log('Starting scan status polling...');
+
+    const stopPolling = () => {
+      if (generation !== scanPollGeneration) {
+        return;
+      }
+      if (scanPollingInterval) {
+        clearInterval(scanPollingInterval);
+        scanPollingInterval = null;
+      }
+    };
 
     const fetchAndUpdateStatus = async () => {
       try {
@@ -561,34 +562,46 @@ document.addEventListener('DOMContentLoaded', async () => {
           throw new Error(`Failed to fetch scan status: ${response.status}`);
         }
         const statusData = await response.json();
+        if (generation !== scanPollGeneration) {
+          return null;
+        }
         updateScanStatusUI(statusData);
+        return statusData.status;
       } catch (error) {
+        if (generation !== scanPollGeneration) {
+          return null;
+        }
         console.error('Error polling scan status:', error);
-        // Optionally update UI to show polling error
         if (scanStatusElement) {
-            scanStatusElement.textContent = 'Error fetching scan status.';
-            scanStatusElement.className = 'scan-status failed';
+          scanStatusElement.textContent = 'Error fetching scan status.';
+          scanStatusElement.className = 'scan-status failed';
         }
-        // Stop polling on error to prevent spamming logs/network
-        if (scanPollingInterval) {
-          clearInterval(scanPollingInterval);
-          scanPollingInterval = null;
-          console.log('Scan status polling stopped due to error.');
-          resetRefreshButtonState(); // Ensure button is usable
-        }
+        resetRefreshButtonState();
+        return null;
       }
     };
 
-    // Fetch immediately first time
-    await fetchAndUpdateStatus();
-
-    // Then set interval if not already completed/failed
-    const currentStatus = scanStatusElement.className.includes('completed') || scanStatusElement.className.includes('failed');
-    if (!currentStatus) {
-        scanPollingInterval = setInterval(fetchAndUpdateStatus, 5000); // Poll every 5 seconds
-    } else {
-        console.log('Scan already completed/failed, not starting interval polling.');
+    const currentStatus = await fetchAndUpdateStatus();
+    if (generation !== scanPollGeneration) {
+      return;
     }
+    if (currentStatus !== 'running') {
+      stopPolling();
+      return;
+    }
+
+    let requestInFlight = false;
+    scanPollingInterval = setInterval(async () => {
+      if (requestInFlight || generation !== scanPollGeneration) {
+        return;
+      }
+      requestInFlight = true;
+      const nextStatus = await fetchAndUpdateStatus();
+      requestInFlight = false;
+      if (nextStatus !== 'running') {
+        stopPolling();
+      }
+    }, 5000);
   }
 
   /**
@@ -737,10 +750,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, { once: true });
       }
 
-      // Add preview functionality if preview manager is available
+      // Seed list-provided metadata without triggering a per-card API request.
       if (videoPreviewManager) {
+        videoPreviewManager.primePreviewInfo(video.id.toString(), video.preview);
         videoPreviewManager.attachPreviewListeners(videoCard, video.id.toString());
-        videoPreviewManager.setupPreviewObserver(videoCard);
       }
 
       return videoCard;
@@ -1071,107 +1084,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   }
 
-  /**
-   * Keep native browser scrolling for input responsiveness and lower scroll jitter.
-   */
-  function initializeGsapSmoothScroll() {
-    console.log('[Performance] Native scrolling enabled.');
-  }
 
   /**
    * Video Overlay Functions
    */
 
-  // FPS monitoring for overlay performance
-  let overlayFPSMonitor = null;
-
-  /**
-   * Start FPS monitoring for overlay video performance
-   * @param {HTMLVideoElement} videoElement - The video element to monitor
-   */
-  function startOverlayFPSMonitoring(videoElement) {
-    if (!videoElement || !('requestVideoFrameCallback' in videoElement)) {
-      console.warn('[Performance] requestVideoFrameCallback not supported, FPS monitoring disabled');
-      return;
-    }
-
-    stopOverlayFPSMonitoring(); // Stop any existing monitoring
-
-    const monitor = {
-      frameCount: 0,
-      lastTime: performance.now(),
-      startTime: performance.now(),
-      sampleCount: 0,
-      totalFPS: 0,
-      minFPS: Infinity,
-      maxFPS: 0,
-      belowThreshold: 0,
-      element: videoElement,
-      callbackId: null,
-      isActive: true
-    };
-
-    const fpsCallback = (now, metadata) => {
-      if (!monitor.isActive) return;
-
-      monitor.frameCount++;
-      const elapsed = now - monitor.lastTime;
-
-      // Calculate FPS every 1 second
-      if (elapsed >= 1000) {
-        const fps = Math.round((monitor.frameCount * 1000) / elapsed);
-        monitor.frameCount = 0;
-        monitor.lastTime = now;
-        monitor.sampleCount++;
-        monitor.totalFPS += fps;
-        monitor.minFPS = Math.min(monitor.minFPS, fps);
-        monitor.maxFPS = Math.max(monitor.maxFPS, fps);
-
-        if (fps < 30) {
-          monitor.belowThreshold++;
-        }
-
-        // Log FPS periodically for debugging
-        if (monitor.sampleCount % 5 === 0) {
-          const avgFPS = Math.round(monitor.totalFPS / monitor.sampleCount);
-          console.log(`[Performance] Overlay FPS - Current: ${fps}, Avg: ${avgFPS}, Min: ${monitor.minFPS}, Max: ${monitor.maxFPS}, Below 30fps: ${monitor.belowThreshold}/${monitor.sampleCount} samples`);
-        }
-
-      }
-
-      // Continue monitoring
-      if (monitor.isActive) {
-        monitor.callbackId = videoElement.requestVideoFrameCallback(fpsCallback);
-      }
-    };
-
-    // Start monitoring
-    monitor.callbackId = videoElement.requestVideoFrameCallback(fpsCallback);
-    overlayFPSMonitor = monitor;
-
-    console.log('[Performance] Started overlay FPS monitoring');
-  }
-
-  /**
-   * Stop FPS monitoring for overlay
-   */
-  function stopOverlayFPSMonitoring() {
-    if (overlayFPSMonitor) {
-      overlayFPSMonitor.isActive = false;
-      if (overlayFPSMonitor.callbackId && overlayFPSMonitor.element) {
-        overlayFPSMonitor.element.cancelVideoFrameCallback(overlayFPSMonitor.callbackId);
-      }
-
-      // Log final stats
-      if (overlayFPSMonitor.sampleCount > 0) {
-        const avgFPS = Math.round(overlayFPSMonitor.totalFPS / overlayFPSMonitor.sampleCount);
-        const duration = Math.round((performance.now() - overlayFPSMonitor.startTime) / 1000);
-        console.log(`[Performance] Overlay FPS monitoring stopped - Duration: ${duration}s, Avg FPS: ${avgFPS}, Min: ${overlayFPSMonitor.minFPS}, Max: ${overlayFPSMonitor.maxFPS}`);
-      }
-
-      overlayFPSMonitor = null;
-    }
-  }
 
   function shouldUseReducedMotion() {
     return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1413,8 +1330,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       // Initialize Plyr
       initializeOverlayPlayer(video);
 
-      // Start FPS monitoring for performance analysis
-      startOverlayFPSMonitoring(overlayVideo);
       
       // Update favorite button state
       updateOverlayFavoriteButton(videoId);
@@ -1439,8 +1354,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const overlay = document.getElementById('video-overlay');
     const playerContainer = document.querySelector('.video-overlay-player-container');
 
-    // Stop FPS monitoring
-    stopOverlayFPSMonitoring();
 
     clearOverlayOpenTransition();
     clearOverlayCloseTransition();
@@ -1923,20 +1836,25 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   // --- Initial Load ---
+  vodsNamePromise.then((name) => {
+    vodsName = name;
+    document.getElementById('app-title').textContent = vodsName;
+    document.getElementById('footer-text').textContent = `© ${vodsName} - A simple VOD sharing system`;
+    if (!overlayCurrentVideoId) {
+      document.title = vodsName;
+    }
+  });
+
   loadVideos(currentPage, false); // Initial load of page 1
   sortSelect.value = sortBy; // Set dropdown to reflect default sort
   pollScanStatus(); // Check initial scan status on page load
   connectSSE(); // Connect to Server-Sent Events
   initializeInfiniteScroll();
-  initializeGsapSmoothScroll(); // Keep native scroll behavior
-  
-  // Handle direct URL navigation to video overlay
+
+  // DOMContentLoaded and the preceding listeners are the readiness boundary.
   const videoIdFromPath = getWatchVideoIdFromPath(window.location.pathname);
   if (videoIdFromPath) {
-    // Wait for page to load before opening overlay
-    setTimeout(() => {
-      openVideoOverlay(videoIdFromPath, null, { updateHistory: false });
-    }, 500);
+    openVideoOverlay(videoIdFromPath, null, { updateHistory: false });
   }
 
   /**

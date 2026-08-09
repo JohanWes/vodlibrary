@@ -163,4 +163,51 @@ describe('Video Cache Module', () => {
       fs.unlinkSync(tempFilePath);
     }
   });
+
+  test('expired entries release byte and per-video accounting', async () => {
+    cache.updateConfig({ stdTTL: 0.01, maxSegmentsPerVideo: 1 });
+    const options = {
+      namespace: 'stream',
+      quality: 'fixed_2mb',
+      startByte: 0,
+      endByte: 7
+    };
+
+    expect(cache.cacheSegment('1', 0, Buffer.alloc(8), options)).toBe(true);
+    expect(cache.getCacheStats()).toMatchObject({ size: 8, lruEntries: 1 });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(cache.getCachedSegment('1', 0, options)).toBeNull();
+    expect(cache.getCacheStats()).toMatchObject({ size: 0, lruEntries: 0 });
+
+    expect(cache.cacheSegment('1', 1, Buffer.alloc(8), {
+      ...options,
+      startByte: 8,
+      endByte: 15
+    })).toBe(true);
+  });
+
+  test('coalesces concurrent fills for one cache key', async () => {
+    const tempFilePath = path.join(os.tmpdir(), `cache-coalesce-${Date.now()}-${Math.random()}.bin`);
+    fs.writeFileSync(tempFilePath, Buffer.alloc(16, 7));
+    const readStreamSpy = jest.spyOn(fs, 'createReadStream');
+    const options = {
+      namespace: 'stream',
+      quality: 'fixed_2mb'
+    };
+
+    try {
+      const results = await Promise.all([
+        cache.cacheSegmentFromFile('10', 0, tempFilePath, 0, 7, options),
+        cache.cacheSegmentFromFile('10', 0, tempFilePath, 0, 7, options)
+      ]);
+
+      expect(results).toEqual([true, true]);
+      expect(readStreamSpy).toHaveBeenCalledTimes(1);
+      expect(cache.getCacheStats()).toMatchObject({ size: 8, lruEntries: 1 });
+    } finally {
+      readStreamSpy.mockRestore();
+      fs.unlinkSync(tempFilePath);
+    }
+  });
 });

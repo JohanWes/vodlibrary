@@ -11,22 +11,29 @@ const SCRIPT_PATHS = ['public/js/utils.js', 'public/js/video-preview.js', 'publi
 
 /**
  * Boot the index page in jsdom with the given base href and video payload.
- * @param {string} baseHref - Base href to install ('/' or '/vod/')
- * @param {Array<Object>} videos - Videos the list API returns
+ * @param {Promise<Object>} configResponse - Mocked config fetch response
+ * @param {string} urlPath - Initial browser path
  * @returns {JSDOM} - The booted DOM
  */
-function bootApp(baseHref, videos) {
+function bootApp(
+  baseHref,
+  videos,
+  configResponse = Promise.resolve({ ok: true, json: async () => ({ vodsName: 'Test' }) }),
+  urlPath = '/',
+  scanStatusResponses = []
+) {
   let html = fs.readFileSync(INDEX_PATH, 'utf8');
   if (baseHref !== '/') {
     html = html.replace('<base href="/">', `<base href="${baseHref}">`);
   }
-  const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only' });
+  const dom = new JSDOM(html, { url: `http://localhost${urlPath}`, runScripts: 'outside-only' });
   const { window } = dom;
 
   // jsdom gaps used by main.js
   window.requestAnimationFrame = (callback) => setTimeout(() => callback(Date.now()), 16);
   window.cancelAnimationFrame = (handle) => clearTimeout(handle);
   window.setInterval = jest.fn(() => 1); // Scan polling must not keep the test alive
+  window.clearInterval = jest.fn();
   window.EventSource = class MockEventSource {
     constructor(url) {
       this.url = url;
@@ -49,10 +56,16 @@ function bootApp(baseHref, videos) {
   window.fetch = jest.fn((url) => {
     const urlString = String(url);
     if (urlString.includes('/api/config')) {
-      return Promise.resolve({ ok: true, json: async () => ({ vodsName: 'Test' }) });
+      return configResponse;
     }
     if (urlString.includes('/api/scan/status')) {
-      return Promise.resolve({ ok: true, json: async () => ({ status: 'idle' }) });
+      const response = scanStatusResponses.length > 0
+        ? scanStatusResponses.shift()
+        : Promise.resolve({ ok: true, json: async () => ({ status: 'idle' }) });
+      return response;
+    }
+    if (urlString.includes('/api/refresh')) {
+      return Promise.resolve({ ok: true, status: 202, json: async () => ({}) });
     }
     if (urlString.includes('/api/videos?')) {
       return Promise.resolve({ ok: true, json: async () => ({ videos, totalCount: videos.length, limit: 20, page: 1 }) });
@@ -104,6 +117,7 @@ describe('Video card building with base href', () => {
     expect(fetched).toContain('/api/videos?page=1&limit=20&sort=date_added_desc');
     expect(fetched).toContain('/api/scan/status');
     expect(window.EventSource.instances).toEqual(['/api/updates']);
+    expect(window.setInterval).not.toHaveBeenCalled();
 
     const card = window.document.querySelector('.video-card');
     expect(card).toBeTruthy();
@@ -176,6 +190,59 @@ describe('Video card building with base href', () => {
     expect(overlayVideo.getAttribute('src')).toBe('/vod/api/videos/77/stream');
     overlayVideo.dispatchEvent(new window.Event('canplay'));
   });
+
+  test('renders videos without waiting for a slow config response', async () => {
+    const neverResolvingConfig = new Promise(() => {});
+    const dom = bootApp('/', [sampleVideo], neverResolvingConfig);
+    const window = await startApp(dom);
+
+    expect(window.fetch.mock.calls.map((call) => String(call[0]))).toContain(
+      '/api/videos?page=1&limit=20&sort=date_added_desc'
+    );
+    expect(window.document.querySelector('.video-card')).toBeTruthy();
+  });
+
+  test('opens a direct watch URL without an artificial timer', async () => {
+    const dom = bootApp('/', [sampleVideo], undefined, '/watch/42');
+    const window = await startApp(dom);
+
+    expect(window.fetch.mock.calls.map((call) => String(call[0]))).toContain('/api/videos/42');
+    expect(window.document.getElementById('video-overlay').classList.contains('visible')).toBe(true);
+    window.document.getElementById('overlay-video-player').dispatchEvent(new window.Event('canplay'));
+  });
+  test('stops polling when a pre-existing scan reaches a terminal state', async () => {
+    const scanResponses = [
+      Promise.resolve({ ok: true, json: async () => ({ status: 'running' }) }),
+      Promise.resolve({ ok: true, json: async () => ({ status: 'completed' }) })
+    ];
+    const dom = bootApp('/', [sampleVideo], undefined, '/', scanResponses);
+    const window = await startApp(dom);
+
+    expect(window.setInterval).toHaveBeenCalledTimes(1);
+    await window.setInterval.mock.calls[0][0]();
+    expect(window.clearInterval).toHaveBeenCalledWith(1);
+  });
+
+  test('a newer refresh check is the only poll allowed to install an interval', async () => {
+    let resolveInitialScan;
+    const initialScan = new Promise((resolve) => {
+      resolveInitialScan = resolve;
+    });
+    const scanResponses = [
+      initialScan,
+      Promise.resolve({ ok: true, json: async () => ({ status: 'running' }) })
+    ];
+    const dom = bootApp('/', [sampleVideo], undefined, '/', scanResponses);
+    const window = await startApp(dom);
+
+    window.document.getElementById('refresh-btn').click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    resolveInitialScan({ ok: true, json: async () => ({ status: 'running' }) });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(window.setInterval).toHaveBeenCalledTimes(1);
+  });
+
 
   test('malicious title/thumbnail payload stays inert', async () => {
     const maliciousVideo = {

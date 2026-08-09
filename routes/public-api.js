@@ -39,6 +39,42 @@ function parseCanonicalSafeInteger(value, positive) {
 
   return numeric;
 }
+function parseByteRange(rangeHeader, size) {
+  if (typeof rangeHeader !== 'string' || size <= 0) {
+    return null;
+  }
+
+  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
+  if (!match || (match[1] === '' && match[2] === '')) {
+    return null;
+  }
+
+  if (match[1] === '') {
+    const suffixLength = Number(match[2]);
+    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    return {
+      start: Math.max(0, size - suffixLength),
+      end: size - 1
+    };
+  }
+
+  const start = Number(match[1]);
+  const requestedEnd = match[2] === '' ? size - 1 : Number(match[2]);
+  if (!Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(requestedEnd) ||
+      start >= size ||
+      requestedEnd < start) {
+    return null;
+  }
+
+  return {
+    start,
+    end: Math.min(requestedEnd, size - 1)
+  };
+}
+
 
 function isSafeClipPath(clipPath) {
   const segments = clipPath.split('/');
@@ -128,12 +164,40 @@ router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
       return res.redirect(cdnUrl);
     }
 
+    const rangeHeader = req.headers.range;
+    const range = rangeHeader ? parseByteRange(rangeHeader, stat.size) : null;
     res.setHeader('Cache-Control', `${process.env.ENABLE_AUTH === 'true' ? 'private' : 'public'}, max-age=86400`);
-    res.setHeader('Content-Length', stat.size);
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Accept-Ranges', 'bytes');
 
-    fs.createReadStream(previewPath).pipe(res);
+    if (rangeHeader && !range) {
+      res.setHeader('Content-Range', `bytes */${stat.size}`);
+      return res.status(416).end();
+    }
+
+    if (range) {
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${stat.size}`);
+      res.setHeader('Content-Length', (range.end - range.start) + 1);
+    } else {
+      res.setHeader('Content-Length', stat.size);
+    }
+
+    if (req.method === 'HEAD') {
+      return res.end();
+    }
+
+    const stream = fs.createReadStream(previewPath, range || undefined);
+    stream.on('error', (streamError) => {
+      console.error(`Error streaming preview for video ${req.params.id}:`, streamError);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to serve preview' });
+      } else {
+        res.destroy(streamError);
+      }
+    });
+    stream.pipe(res);
+    return undefined;
   } catch (error) {
     console.error(`Error serving preview for video ${req.params.id}:`, error);
     return res.status(500).json({ error: 'Failed to serve preview' });

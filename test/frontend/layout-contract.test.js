@@ -20,6 +20,14 @@ describe('Frontend layout contract', () => {
     expect(favicons).toHaveLength(1);
   });
 
+  test('index does not load the unused GSAP bundle', () => {
+    const document = loadDom('public/index.html');
+    const scripts = Array.from(document.querySelectorAll('script[src]'))
+      .map(script => script.getAttribute('src'));
+
+    expect(scripts.some(src => src && src.toLowerCase().includes('gsap'))).toBe(false);
+  });
+
   test('index page contains required root UI hooks', () => {
     const document = loadDom('public/index.html');
 

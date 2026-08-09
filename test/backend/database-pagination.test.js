@@ -1,10 +1,11 @@
 describe('getVideosPaginated', () => {
   let getVideosPaginated;
+  let getVideosByIds;
 
   beforeEach(() => {
     jest.resetModules();
     jest.unmock('../../db/database');
-    ({ getVideosPaginated } = require('../../db/database'));
+    ({ getVideosPaginated, getVideosByIds } = require('../../db/database'));
   });
 
   test('uses projected columns instead of SELECT *', async () => {
@@ -18,6 +19,7 @@ describe('getVideosPaginated', () => {
     expect(db.all).toHaveBeenCalledTimes(1);
     const calledQuery = db.all.mock.calls[0][0];
     expect(calledQuery).toContain('SELECT id, title, path, duration, width, height, added_date, thumbnail_path');
+    expect(calledQuery).toContain('preview_clips');
     expect(calledQuery).not.toContain('SELECT *');
     expect(result.totalCount).toBe(1);
     expect(result.videos).toHaveLength(1);
@@ -35,5 +37,32 @@ describe('getVideosPaginated', () => {
     expect(db.all.mock.calls[0][0]).toContain('WHERE title LIKE ? COLLATE NOCASE');
     expect(db.all.mock.calls[0][0]).toContain('ORDER BY title COLLATE NOCASE ASC');
     expect(db.all.mock.calls[0][1]).toEqual(['%m+ run%', 10, 10]);
+  });
+});
+
+describe('getVideosByIds', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    jest.unmock('../../db/database');
+    ({ getVideosByIds } = require('../../db/database'));
+  });
+
+  test('skips the database for an empty page', async () => {
+    const db = { all: jest.fn() };
+    await expect(getVideosByIds(db, [])).resolves.toEqual([]);
+    expect(db.all).not.toHaveBeenCalled();
+  });
+
+  test('uses one parameterized projected query', async () => {
+    const rows = [{ id: 2 }, { id: 1 }];
+    const db = {
+      all: jest.fn((_query, _ids, callback) => callback(null, rows))
+    };
+
+    await expect(getVideosByIds(db, [1, 2])).resolves.toEqual(rows);
+    expect(db.all).toHaveBeenCalledTimes(1);
+    expect(db.all.mock.calls[0][0]).toContain('WHERE id IN (?, ?)');
+    expect(db.all.mock.calls[0][0]).not.toContain('SELECT *');
+    expect(db.all.mock.calls[0][1]).toEqual([1, 2]);
   });
 });

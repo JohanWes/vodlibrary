@@ -172,6 +172,23 @@ class VideoPreviewManager {
     return Boolean(mediaError && mediaError.code === 4 && hasNoSrc);
   }
 
+  primePreviewInfo(videoId, descriptor) {
+    if (!descriptor || typeof descriptor !== 'object') {
+      return;
+    }
+
+    const timestamp = descriptor.firstTimestamp;
+    const hasPreview = descriptor.hasPreview === true &&
+      Number.isSafeInteger(timestamp) &&
+      timestamp >= 0;
+
+    this.previewCache.set(String(videoId), {
+      hasPreview,
+      status: descriptor.status || 'pending',
+      clips: hasPreview ? [{ timestamp }] : []
+    });
+  }
+
   /**
    * Preload preview info for a video
    * @param {string} videoId
@@ -515,28 +532,6 @@ class VideoPreviewManager {
     }
   }
 
-  /**
-   * Setup intersection observer for preview preloading
-   * @param {HTMLElement} cardElement
-   */
-  setupPreviewObserver(cardElement) {
-    if (!window.IntersectionObserver) return;
-
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const videoId = entry.target.dataset.id;
-          if (videoId) {
-            // Preload preview info when card comes into viewport
-            this.preloadPreviewInfo(videoId);
-          }
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { rootMargin: '200px', threshold: 0.1 });
-
-    observer.observe(cardElement);
-  }
 
   /**
    * Get adaptive quality based on network conditions

@@ -116,6 +116,23 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
     });
   });
 
+  describe('List metadata priming', () => {
+    test('uses the seeded descriptor without a metadata request', async () => {
+      manager.primePreviewInfo('1', {
+        hasPreview: true,
+        status: 'completed',
+        firstTimestamp: 10
+      });
+
+      await expect(manager.preloadPreviewInfo('1')).resolves.toEqual({
+        hasPreview: true,
+        status: 'completed',
+        clips: [{ timestamp: 10 }]
+      });
+      expect(global.fetch).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Multiple Simultaneous Previews', () => {
     test('should limit concurrent previews to maximum allowed', async () => {
       const videoCard1 = mockVideoCard;

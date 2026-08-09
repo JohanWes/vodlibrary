@@ -122,6 +122,45 @@ describe('Public Preview API Endpoints', () => {
       expect(servedPath).not.toBe(testVideoData.path);
     });
 
+    test.each([
+      ['bytes=100-199', 100, 199, 'bytes 100-199/524288'],
+      ['bytes=524280-', 524280, 524287, 'bytes 524280-524287/524288'],
+      ['bytes=-8', 524280, 524287, 'bytes 524280-524287/524288'],
+      ['bytes=524280-999999', 524280, 524287, 'bytes 524280-524287/524288']
+    ])('serves a single range for %s', async (rangeHeader, start, end, contentRange) => {
+      const { getVideoById } = require('../../db/database');
+      getVideoById.mockResolvedValue(testVideoData);
+
+      const response = await request(app)
+        .get('/api/videos/1/preview/10')
+        .set('Range', rangeHeader)
+        .expect(206);
+
+      expect(response.headers['content-range']).toBe(contentRange);
+      expect(response.headers['content-length']).toBe(String((end - start) + 1));
+      expect(response.headers['accept-ranges']).toBe('bytes');
+      expect(fs.createReadStream.mock.calls[0][1]).toEqual({ start, end });
+    });
+
+    test.each([
+      'items=0-1',
+      'bytes=',
+      'bytes=0-1,3-4',
+      'bytes=-0',
+      'bytes=524288-'
+    ])('rejects invalid or unsatisfiable range %s', async (rangeHeader) => {
+      const { getVideoById } = require('../../db/database');
+      getVideoById.mockResolvedValue(testVideoData);
+
+      const response = await request(app)
+        .get('/api/videos/1/preview/10')
+        .set('Range', rangeHeader)
+        .expect(416);
+
+      expect(response.headers['content-range']).toBe('bytes */524288');
+      expect(fs.createReadStream).not.toHaveBeenCalled();
+    });
+
     test('returns 404 when no preview clips exist instead of serving source bytes', async () => {
       const { getVideoById } = require('../../db/database');
       getVideoById.mockResolvedValue({

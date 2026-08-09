@@ -117,7 +117,8 @@ function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort =
       'thumbnail_path',
       'death_timestamps',
       'preview_generation_status',
-      'preview_generation_date'
+      'preview_generation_date',
+      'preview_clips'
     ].join(', ');
 
     let query = `SELECT ${listColumns} FROM videos`;
@@ -328,6 +329,36 @@ function deleteVideo(db, id) {
   });
 }
 
+function getVideosByIds(db, ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return Promise.resolve([]);
+  }
+
+  const placeholders = ids.map(() => '?').join(', ');
+  const columns = [
+    'id',
+    'title',
+    'duration',
+    'width',
+    'height',
+    'added_date',
+    'thumbnail_path',
+    'death_timestamps',
+    'preview_clips',
+    'preview_generation_status'
+  ].join(', ');
+
+  return new Promise((resolve, reject) => {
+    db.all(`SELECT ${columns} FROM videos WHERE id IN (${placeholders})`, ids, (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve(rows);
+    });
+  });
+}
+
 /**
  * Get all videos that have metadata for advanced search
  */
@@ -355,5 +386,6 @@ module.exports = {
   getAllVideoPaths,
   deleteVideo,
   getVideosPaginated,
-  getVideosWithMetadata
+  getVideosWithMetadata,
+  getVideosByIds
 };

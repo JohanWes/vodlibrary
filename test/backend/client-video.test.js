@@ -12,7 +12,7 @@ const fullRow = {
   added_date: '2026-08-01 12:00:00',
   thumbnail_path: '/data/thumbnails/42.jpg',
   death_timestamps: '[{"time": 120}, {"time": 900}]',
-  preview_clips: '[{"start": 0, "end": 10}]',
+  preview_clips: '{"clips":[{"timestamp":0,"path":"/previews/internal.mp4","size":1234}]}',
   preview_generation_status: 'completed',
   preview_generation_date: '2026-08-01 12:05:00',
   metadata: { description: 'internal enrichment' },
@@ -31,7 +31,12 @@ describe('toVideoCard', () => {
       added_date: '2026-08-01 12:00:00',
       thumbnail_path: '/data/thumbnails/42.jpg',
       death_timestamps: '[{"time": 120}, {"time": 900}]',
-      duration_formatted: '62:05'
+      duration_formatted: '62:05',
+      preview: {
+        hasPreview: true,
+        status: 'completed',
+        firstTimestamp: 0
+      }
     });
   });
 
@@ -56,6 +61,7 @@ describe('toVideoCard', () => {
       'duration_formatted',
       'height',
       'id',
+      'preview',
       'thumbnail_path',
       'title',
       'width'
@@ -85,7 +91,25 @@ describe('toVideoCard', () => {
       added_date: '2026-08-02 09:00:00',
       thumbnail_path: null,
       death_timestamps: null,
-      duration_formatted: null
+      duration_formatted: null,
+      preview: {
+        hasPreview: false,
+        status: 'pending',
+        firstTimestamp: null
+      }
+    });
+  });
+
+  test('treats malformed preview metadata as unavailable', () => {
+    const card = toVideoCard({
+      ...fullRow,
+      preview_clips: '{bad json'
+    });
+
+    expect(card.preview).toEqual({
+      hasPreview: false,
+      status: 'completed',
+      firstTimestamp: null
     });
   });
 
