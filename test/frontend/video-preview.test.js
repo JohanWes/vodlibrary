@@ -9,12 +9,10 @@ global.fetch = jest.fn();
 global.HTMLVideoElement.prototype.play = jest.fn().mockImplementation(() => Promise.resolve());
 global.HTMLVideoElement.prototype.pause = jest.fn();
 
-// Mock performance API
-global.performance = {
-  now: jest.fn().mockReturnValue(1000),
-  mark: jest.fn(),
-  measure: jest.fn()
-};
+// utils.js provides the global appUrl() used for preview URLs (as on the page)
+const fs = require('fs');
+const path = require('path');
+(0, eval)(fs.readFileSync(path.resolve(__dirname, '..', '..', 'public/js/utils.js'), 'utf8'));
 
 // Import VideoPreviewManager using require (CommonJS export)
 const { VideoPreviewManager } = require('../../public/js/video-preview.js');
@@ -48,7 +46,7 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
 
   afterEach(() => {
     if (manager) {
-      manager.cleanup();
+      manager.hideAll();
     }
     jest.clearAllMocks();
   });
@@ -102,17 +100,101 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
     });
   });
 
-  describe('Event Listener Attachment', () => {
-    test('should attach and remove preview listeners', () => {
-      manager.attachPreviewListeners(mockVideoCard, '1');
+  describe('Grid event delegation', () => {
+    test('hovering a card through the grid starts and cancels the hover timer', () => {
+      const grid = document.createElement('div');
+      grid.appendChild(mockVideoCard);
+      document.body.appendChild(grid);
+      manager.attachToGrid(grid);
+      const hoverSpy = jest.spyOn(manager, 'handleHover');
+      const leaveSpy = jest.spyOn(manager, 'handleMouseLeave');
 
-      expect(mockVideoCard._previewHandlers).toBeDefined();
-      expect(mockVideoCard._previewHandlers.mouseEnter).toBeDefined();
-      expect(mockVideoCard._previewHandlers.mouseLeave).toBeDefined();
+      mockThumbnailContainer.dispatchEvent(new MouseEvent('pointerover', { bubbles: true, relatedTarget: document.body }));
+      expect(hoverSpy).toHaveBeenCalledWith(mockVideoCard, '1');
+      expect(manager.hoverTimeouts.has('1')).toBe(true);
 
-      manager.removePreviewListeners(mockVideoCard);
+      // Moving between children of the same card is not a leave
+      mockThumbnailContainer.dispatchEvent(new MouseEvent('pointerout', { bubbles: true, relatedTarget: mockVideoCard }));
+      expect(leaveSpy).not.toHaveBeenCalled();
 
-      expect(mockVideoCard._previewHandlers).toBeUndefined();
+      mockThumbnailContainer.dispatchEvent(new MouseEvent('pointerout', { bubbles: true, relatedTarget: document.body }));
+      expect(leaveSpy).toHaveBeenCalledWith(mockVideoCard, '1');
+      expect(manager.hoverTimeouts.has('1')).toBe(false);
+    });
+  });
+
+  describe('Teardown on re-render', () => {
+    const previewResponse = {
+      ok: true,
+      json: () => Promise.resolve({ hasPreview: true, status: 'completed', clips: [{ timestamp: 10 }] })
+    };
+
+    test('hideAll stops, unloads and detaches every active preview immediately', async () => {
+      const card2 = document.createElement('div');
+      card2.className = 'video-card';
+      card2.dataset.id = '2';
+      card2.appendChild(document.createElement('div')).className = 'thumbnail-container';
+      document.body.appendChild(card2);
+      global.fetch.mockResolvedValue(previewResponse);
+
+      await manager.showPreview(mockVideoCard, '1');
+      await manager.showPreview(card2, '2');
+      const elements = [...manager.activeVideos.values()].map((active) => active.element);
+      expect(elements).toHaveLength(2);
+      expect(elements[0].getAttribute('src')).toBe('/api/videos/1/preview/10');
+
+      HTMLVideoElement.prototype.pause.mockClear();
+      const loadSpy = jest.spyOn(HTMLVideoElement.prototype, 'load').mockImplementation(() => {});
+      manager.hideAll();
+
+      expect(manager.activeVideos.size).toBe(0);
+      elements.forEach((video) => {
+        expect(video.hasAttribute('src')).toBe(false);
+        expect(video.isConnected).toBe(false);
+      });
+      expect(HTMLVideoElement.prototype.pause).toHaveBeenCalledTimes(2);
+      expect(loadSpy).toHaveBeenCalledTimes(2);
+      loadSpy.mockRestore();
+
+      // The concurrency budget is free again after a grid re-render
+      document.body.innerHTML = '';
+      const freshCard = document.createElement('div');
+      freshCard.className = 'video-card';
+      freshCard.appendChild(document.createElement('div')).className = 'thumbnail-container';
+      document.body.appendChild(freshCard);
+      await manager.showPreview(freshCard, '3');
+      expect(manager.activeVideos.has('3')).toBe(true);
+    });
+
+    test('a card removed while preview info loads never gets a video', async () => {
+      let resolveFetch;
+      global.fetch.mockImplementationOnce(() => new Promise((resolve) => { resolveFetch = resolve; }));
+
+      const pending = manager.showPreview(mockVideoCard, '1');
+      mockVideoCard.remove();
+      resolveFetch(previewResponse);
+      await pending;
+
+      expect(manager.activeVideos.size).toBe(0);
+      expect(mockThumbnailContainer.querySelector('video')).toBeNull();
+    });
+
+    test('leaving the card aborts the in-flight preview-info request', async () => {
+      let requestSignal;
+      global.fetch.mockImplementationOnce((url, init) => {
+        requestSignal = init.signal;
+        return new Promise((resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        });
+      });
+
+      const pending = manager.showPreview(mockVideoCard, '1');
+      manager.handleMouseLeave(mockVideoCard, '1');
+      await pending;
+
+      expect(requestSignal.aborted).toBe(true);
+      expect(manager.activeVideos.size).toBe(0);
+      expect(mockThumbnailContainer.querySelector('video')).toBeNull();
     });
   });
 
@@ -126,7 +208,6 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
 
       await expect(manager.preloadPreviewInfo('1')).resolves.toEqual({
         hasPreview: true,
-        status: 'completed',
         clips: [{ timestamp: 10 }]
       });
       expect(global.fetch).not.toHaveBeenCalled();
@@ -215,21 +296,19 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
         })
       });
 
-      const showFallbackSpy = jest.spyOn(manager, 'showFallbackPreview');
-
       await manager.showPreview(mockVideoCard, '1');
 
-      expect(showFallbackSpy).toHaveBeenCalledWith(mockVideoCard, '1');
+      expect(mockVideoCard.classList.contains('preview-fallback')).toBe(true);
+      expect(mockVideoCard.querySelector('video')).toBeNull();
     });
 
     test('should fallback when preview loading fails', async () => {
       global.fetch.mockRejectedValueOnce(new Error('Network error'));
 
-      const showFallbackSpy = jest.spyOn(manager, 'showFallbackPreview');
-
       await manager.showPreview(mockVideoCard, '1');
 
-      expect(showFallbackSpy).toHaveBeenCalledWith(mockVideoCard, '1');
+      expect(mockVideoCard.classList.contains('preview-fallback')).toBe(true);
+      expect(mockVideoCard.querySelector('video')).toBeNull();
     });
 
     test('should ignore empty-src media errors during preview teardown', async () => {
@@ -245,8 +324,6 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
         });
 
         const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-        const showFallbackSpy = jest.spyOn(manager, 'showFallbackPreview');
-
         await manager.showPreview(mockVideoCard, '1');
 
         const activeVideo = manager.activeVideos.get('1');
@@ -269,7 +346,7 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
         activeVideo.element.dispatchEvent(new Event('error'));
         jest.advanceTimersByTime(350);
 
-        expect(showFallbackSpy).not.toHaveBeenCalled();
+        expect(mockVideoCard.classList.contains('preview-fallback')).toBe(false);
         expect(
           consoleErrorSpy.mock.calls.some(
             (args) =>
@@ -308,17 +385,6 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
 
       // Pool should not exceed max size
       expect(manager.videoPool.length).toBeLessThanOrEqual(manager.maxPoolSize);
-    });
-
-    test('should clean up all active previews on manager cleanup', () => {
-      // Create active previews
-      manager.activeVideos.set('1', { element: document.createElement('video'), container: mockThumbnailContainer });
-      manager.activeVideos.set('2', { element: document.createElement('video'), container: mockThumbnailContainer });
-
-      manager.cleanup();
-
-      expect(manager.activeVideos.size).toBe(0);
-      expect(manager.videoPool.length).toBe(0);
     });
   });
 
@@ -360,35 +426,6 @@ describe('VideoPreviewManager - Hover Preview Tests', () => {
       // Should only make one API call due to caching
       expect(global.fetch).toHaveBeenCalledTimes(1);
       expect(manager.previewCache.get('1')).toEqual(previewInfo);
-    });
-  });
-
-  describe('Adaptive Quality', () => {
-    test('should return low quality for slow networks', () => {
-      Object.defineProperty(navigator, 'connection', {
-        value: { effectiveType: '2g', downlink: 0.5 },
-        configurable: true
-      });
-
-      expect(manager.getAdaptiveQuality()).toBe('low');
-    });
-
-    test('should return high quality for fast networks', () => {
-      Object.defineProperty(navigator, 'connection', {
-        value: { effectiveType: '4g', downlink: 10 },
-        configurable: true
-      });
-
-      expect(manager.getAdaptiveQuality()).toBe('high');
-    });
-
-    test('should return medium quality when connection info unavailable', () => {
-      Object.defineProperty(navigator, 'connection', {
-        value: undefined,
-        configurable: true
-      });
-
-      expect(manager.getAdaptiveQuality()).toBe('medium');
     });
   });
 });

@@ -1,6 +1,7 @@
 {
   "name": "johanvods2",
   "version": "1.0.0",
+  "private": true,
   "description": "A simple VOD sharing system",
   "main": "server.js",
   "scripts": {
@@ -26,8 +27,6 @@
     "chokidar": "^4.0.3",
     "cookie-parser": "^1.4.7",
     "express": "^4.22.2",
-    "fluent-ffmpeg": "^2.1.3",
-    "node-cache": "^5.1.2",
     "sqlite3": "^6.0.1"
   },
   "devDependencies": {

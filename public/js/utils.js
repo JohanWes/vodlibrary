@@ -1,76 +1,73 @@
 /**
- * Utility functions for the video application
+ * Shared helpers for the index and player pages.
+ * Served before authentication (share-link viewers), so keep it free of private data.
  */
 
 /**
  * Show a toast notification
- * @param {string} message - The message to display
- * @param {string} type - The type of toast (info, error, etc.)
+ * @param {string} message - Text to display (rendered as text, never HTML)
+ * @param {string} type - info | success | error
  */
 function showToast(message, type = 'info') {
-  // Create toast container if it doesn't exist
   let toastContainer = document.querySelector('.toast-container');
   if (!toastContainer) {
     toastContainer = document.createElement('div');
     toastContainer.className = 'toast-container';
+    toastContainer.setAttribute('role', 'status');
     document.body.appendChild(toastContainer);
   }
-  
-  // Create toast element
+
   const toast = document.createElement('div');
   toast.className = `toast ${type}`;
   toast.textContent = message;
-  
-  // Add to container
   toastContainer.appendChild(toast);
-  
-  // Trigger animation
-  setTimeout(() => {
-    toast.classList.add('show');
-  }, 10);
-  
-  // Remove after delay
+
+  setTimeout(() => toast.classList.add('show'), 10);
   setTimeout(() => {
     toast.classList.remove('show');
-    setTimeout(() => {
-      toast.remove();
-    }, 300);
+    setTimeout(() => toast.remove(), 300);
   }, 3000);
 }
 
 /**
- * Generate a placeholder thumbnail as data URI
- * @returns {string} - Data URI for the placeholder thumbnail
+ * Placeholder thumbnail as a data URI
+ * @returns {string}
  */
 function getPlaceholderThumbnail() {
-  // Modern SVG placeholder with play icon
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="400" height="225" viewBox="0 0 400 225">
-      <defs>
-        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" style="stop-color:#1a1a22;stop-opacity:1" />
-          <stop offset="100%" style="stop-color:#23232d;stop-opacity:1" />
-        </linearGradient>
-      </defs>
-      <rect width="400" height="225" fill="url(#grad)"/>
-      <circle cx="200" cy="112.5" r="50" fill="#2c2c3a"/>
-      <polygon points="185,90 185,135 225,112.5" fill="#5c6cff"/>
-    </svg>
-  `);
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="225" viewBox="0 0 400 225">'
+    + '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
+    + '<stop offset="0%" stop-color="#1a1a22"/><stop offset="100%" stop-color="#23232d"/></linearGradient></defs>'
+    + '<rect width="400" height="225" fill="url(#g)"/><circle cx="200" cy="112.5" r="50" fill="#2c2c3a"/>'
+    + '<polygon points="185,90 185,135 225,112.5" fill="#5c6cff"/></svg>'
+  );
 }
 
 /**
- * Format duration in seconds to MM:SS format
- * @param {number} seconds - Duration in seconds
- * @returns {string} - Formatted duration string
+ * Format seconds as a clock string: MM:SS below one hour, H:MM:SS above.
+ * The single time/duration formatter for the client (cards, overlay, player, markers).
+ * @param {number} seconds
+ * @returns {string} e.g. 01:05, 25:00, 1:15:30
  */
-function formatDuration(seconds) {
-  if (!seconds) return '00:00';
-  
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-  
-  return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+function formatClock(seconds) {
+  const total = Number.isFinite(Number(seconds)) && Number(seconds) > 0 ? Math.floor(Number(seconds)) : 0;
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  const mmss = `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  return hours > 0 ? `${hours}:${mmss}` : mmss;
+}
+
+/**
+ * Display duration for a video DTO; prefers the numeric duration so >1 h renders as H:MM:SS.
+ * @param {{duration?: number, duration_formatted?: string}} video
+ * @returns {string}
+ */
+function formatVideoDuration(video) {
+  if (video && video.duration !== null && video.duration !== undefined && Number.isFinite(Number(video.duration))) {
+    return formatClock(video.duration);
+  }
+  return (video && video.duration_formatted) || '';
 }
 
 /**
@@ -80,16 +77,14 @@ function formatDuration(seconds) {
  */
 function appUrl(path) {
   let basePath = '/';
-  if (typeof document !== 'undefined') {
-    const baseElement = document.querySelector('base[href]');
-    const baseHref = baseElement ? baseElement.getAttribute('href') : '';
-    if (baseHref) {
-      try {
-        // Resolve the base href against the page URL (document.URL excludes the base itself)
-        basePath = new URL(baseHref, document.URL || undefined).pathname;
-      } catch (urlError) {
-        basePath = baseHref.split(/[?#]/)[0] || '/';
-      }
+  const baseElement = document.querySelector('base[href]');
+  const baseHref = baseElement ? baseElement.getAttribute('href') : '';
+  if (baseHref) {
+    try {
+      // Resolve the base href against the page URL (document.URL excludes the base itself)
+      basePath = new URL(baseHref, document.URL || undefined).pathname;
+    } catch (urlError) {
+      basePath = baseHref.split(/[?#]/)[0] || '/';
     }
   }
 
@@ -105,191 +100,85 @@ function appUrl(path) {
   return `${basePath}${pathPart.replace(/^\/+/, '')}${suffix}`;
 }
 
-// Add CSS for toast and animations
-function addUtilStyles() {
-  const style = document.createElement('style');
-  style.textContent = `
-    .toast-container {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      z-index: 1000;
-    }
-    
-    .toast {
-      background-color: var(--bg-secondary);
-      color: var(--text-color);
-      padding: 12px 20px;
-      border-radius: var(--radius-md);
-      margin-top: 10px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      transform: translateX(100%);
-      opacity: 0;
-      transition: all 0.3s ease;
-      border-left: 4px solid var(--accent-color);
-    }
-    
-    .toast.error {
-      border-left-color: #ff5c5c;
-    }
-    
-    .toast.show {
-      transform: translateX(0);
-      opacity: 1;
-    }
-    
-    .fade-in {
-      animation: fadeIn 0.5s ease forwards;
-      opacity: 0;
-      transform: translateY(20px);
-    }
-    
-    @keyframes fadeIn {
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-    
-    .spin {
-      animation: spin 1s linear infinite;
-    }
-    
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-  `;
-  document.head.appendChild(style);
-}
+let appConfigPromise = null;
 
 /**
- * Fetch application configuration from the server
- * @returns {Promise<Object>} - Configuration object
+ * Fetch (once) the public application configuration
+ * @returns {Promise<Object>} - e.g. { vodsName, advancedSearch? }
  */
-async function getAppConfig() {
-  try {
-    const response = await fetch(appUrl('/api/config'));
-    if (!response.ok) {
-      throw new Error('Failed to fetch app configuration');
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('Error fetching app configuration:', error);
-    return { vodsName: 'Sample' }; // Default fallback
+function getAppConfig() {
+  if (!appConfigPromise) {
+    appConfigPromise = fetch(appUrl('/api/config'))
+      .then((response) => {
+        if (!response.ok) throw new Error(`Config request failed (${response.status})`);
+        return response.json();
+      })
+      .catch((error) => {
+        console.error('Error fetching app configuration:', error);
+        return { vodsName: 'VODlibrary' };
+      });
   }
+  return appConfigPromise;
 }
 
-// App configuration cache
-let appConfig = null;
+// --- Favorites: one parsed Set per page, persisted as a JSON array of string ids ---
+const FAVORITES_KEY = 'videoFavorites';
+let favoritesCache = null;
 
-/**
- * Get the VODs name with "VODs" appended
- * @returns {Promise<string>} - The formatted VODs name
- */
-async function getVODsName() {
-  if (!appConfig) {
-    appConfig = await getAppConfig();
+function readFavorites() {
+  if (!favoritesCache) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+      favoritesCache = new Set(Array.isArray(parsed) ? parsed.map(String) : []);
+    } catch (error) {
+      favoritesCache = new Set();
+    }
   }
-  return `${appConfig.vodsName}VODs`;
+  return favoritesCache;
 }
 
-/**
- * Add a video to favorites
- * @param {string} videoId - The ID of the video to add to favorites
- */
-function addToFavorites(videoId) {
-  // Get current favorites from localStorage
-  const favorites = getFavorites();
-  
-  // Add the video ID if it's not already in favorites
-  if (!favorites.includes(videoId)) {
-    favorites.push(videoId);
-    
-    // Save updated favorites to localStorage
-    localStorage.setItem('videoFavorites', JSON.stringify(favorites));
-    
-    return true; // Added successfully
-  }
-  
-  return false; // Already in favorites
+/** Drop the in-memory copy so the next read re-parses storage (bfcache restore, other tabs). */
+function reloadFavorites() {
+  favoritesCache = null;
 }
 
-/**
- * Remove a video from favorites
- * @param {string} videoId - The ID of the video to remove from favorites
- */
-function removeFromFavorites(videoId) {
-  // Get current favorites from localStorage
-  const favorites = getFavorites();
-  
-  // Find the index of the video ID
-  const index = favorites.indexOf(videoId);
-  
-  // Remove the video ID if it exists in favorites
-  if (index !== -1) {
-    favorites.splice(index, 1);
-    
-    // Save updated favorites to localStorage
-    localStorage.setItem('videoFavorites', JSON.stringify(favorites));
-    
-    return true; // Removed successfully
-  }
-  
-  return false; // Not in favorites
-}
-
-/**
- * Check if a video is in favorites
- * @param {string} videoId - The ID of the video to check
- * @returns {boolean} - True if the video is in favorites, false otherwise
- */
 function isFavorite(videoId) {
-  // Get current favorites from localStorage
-  const favorites = getFavorites();
-  
-  // Check if the video ID is in favorites
-  return favorites.includes(videoId);
+  return readFavorites().has(String(videoId));
 }
 
 /**
- * Toggle favorite status for a video
- * @param {string} videoId - The ID of the video to toggle
- * @returns {boolean} - True if the video is now favorited, false if it was removed
+ * @param {string|number} videoId
+ * @returns {boolean} - True if the video is now a favorite
  */
 function toggleFavorite(videoId) {
-  if (isFavorite(videoId)) {
-    removeFromFavorites(videoId);
-    return false; // Now not favorited
+  const favorites = readFavorites();
+  const id = String(videoId);
+  const nowFavorite = !favorites.has(id);
+  if (nowFavorite) {
+    favorites.add(id);
   } else {
-    addToFavorites(videoId);
-    return true; // Now favorited
+    favorites.delete(id);
   }
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favorites]));
+  } catch (error) {
+    console.warn('Could not persist favorites:', error);
+  }
+  return nowFavorite;
 }
 
-/**
- * Get all favorite video IDs
- * @returns {Array<string>} - Array of favorite video IDs
- */
-function getFavorites() {
-  // Get favorites from localStorage
-  const favoritesJson = localStorage.getItem('videoFavorites');
-  
-  // Parse JSON or return empty array if no favorites exist
-  return favoritesJson ? JSON.parse(favoritesJson) : [];
-}
+window.addEventListener('storage', (event) => {
+  if (event.key === FAVORITES_KEY || event.key === null) reloadFavorites();
+});
 
-// Export the utility functions
 window.VideoUtils = {
   showToast,
   getPlaceholderThumbnail,
-  formatDuration,
+  formatClock,
+  formatVideoDuration,
   appUrl,
-  addUtilStyles,
   getAppConfig,
-  getVODsName,
-  addToFavorites,
-  removeFromFavorites,
   isFavorite,
   toggleFavorite,
-  getFavorites
+  reloadFavorites
 };

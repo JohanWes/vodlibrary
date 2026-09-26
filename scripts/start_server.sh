@@ -1,9 +1,12 @@
 #!/bin/bash
-# VODlibrary Startup Script for KDE Autostart
-cd /home/johanw/repos/VODlibrary
+# VODlibrary startup script for KDE autostart (non-interactive).
+set -euo pipefail
 
-# Log start time
-echo "Starting VODlibrary at $(date)" >> server.log
+# Run from the repo root, wherever the repo lives (resolves symlinks).
+cd "$(dirname "$(readlink -f "$0")")/.." || exit 1
 
-# Start server using npm
-npm start >> server.log 2>&1
+# Keep one previous log instead of appending to an ever-growing file.
+if [ -f server.log ]; then mv -f server.log server.log.1; fi
+echo "Starting VODlibrary at $(date)" > server.log
+
+exec npm start >> server.log 2>&1

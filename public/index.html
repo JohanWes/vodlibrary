@@ -7,11 +7,9 @@
   <meta name="description" content="A simple VOD sharing system">
   <title>Loading...</title>
   <link rel="icon" href="favicon.ico" type="image/x-icon">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preload" href="fonts/manrope-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/style.css">
-  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
 </head>
 <body>
   <header>
@@ -24,14 +22,14 @@
         <circle cx="11" cy="11" r="8"></circle>
         <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
       </svg>
-      <input type="text" id="search-input" placeholder="Search videos..." class="search-input">
+      <input type="search" id="search-input" placeholder="Search videos..." class="search-input" aria-label="Search videos" autocomplete="off">
       <div class="advanced-search-container">
         <label class="advanced-search-label" for="advanced-search-toggle">
           <input type="checkbox" id="advanced-search-toggle" class="advanced-search-input">
           <span class="advanced-search-switch"></span>
           <span class="advanced-search-text">Advanced</span>
         </label>
-        <button id="search-button" class="search-button" title="Search" style="display: none;">
+        <button type="button" id="search-button" class="search-button" title="Search" aria-label="Run advanced search" hidden>
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="11" cy="11" r="8"></circle>
             <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
@@ -40,13 +38,13 @@
       </div>
     </div>
     <div class="header-actions">
-      <div id="scan-status" class="scan-status" aria-live="polite"></div> <!-- Added scan status display -->
-      <button id="refresh-btn" class="refresh-btn">
+      <div id="scan-status" class="scan-status" aria-live="polite" hidden></div>
+      <button type="button" id="refresh-btn" class="refresh-btn">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
           <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
           <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
         </svg>
-        Refresh Videos
+        <span class="refresh-label">Refresh Videos</span>
       </button>
     </div>
   </header>
@@ -64,13 +62,13 @@
             </label>
           </div>
           <div class="sort-container">
-            <span>Sort by:</span>
+            <label for="sort-select">Sort by:</label>
             <select id="sort-select">
-              <option value="date_added_desc">Date added (Newest)</option> 
+              <option value="date_added_desc">Date added (Newest)</option>
               <option value="date_added_asc">Date added (Oldest)</option>
               <option value="title_asc">Title (A-Z)</option>
               <option value="title_desc">Title (Z-A)</option>
-              <option value="duration_desc">Duration (Longest)</option> 
+              <option value="duration_desc">Duration (Longest)</option>
               <option value="duration_asc">Duration (Shortest)</option>
             </select>
           </div>
@@ -78,7 +76,6 @@
       </div>
       
       <div id="videos-grid" class="videos-grid">
-        <!-- Videos will be loaded here dynamically -->
         <div class="loading">Loading videos...</div>
       </div>
       <div id="videos-load-sentinel" class="videos-load-sentinel" aria-hidden="true"></div>
@@ -93,18 +90,16 @@
 
   <!-- Video Overlay Modal -->
   <div id="video-overlay" class="video-overlay" role="dialog" aria-modal="true" aria-labelledby="overlay-video-title" aria-hidden="true">
-    <div class="video-overlay-backdrop" onclick="closeVideoOverlay()"></div>
-    <div class="video-overlay-container">
-      <button class="video-overlay-close" onclick="closeVideoOverlay()" aria-label="Close video player">
+    <div class="video-overlay-backdrop"></div>
+    <div class="video-overlay-container" tabindex="-1">
+      <button type="button" class="video-overlay-close" aria-label="Close video player">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 16 16">
           <path d="M2.146 2.854a.5.5 0 1 1 .708-.708L8 7.293l5.146-5.147a.5.5 0 0 1 .708.708L8.707 8l5.147 5.146a.5.5 0 0 1-.708.708L8 8.707l-5.146 5.147a.5.5 0 0 1-.708-.708L7.293 8 2.146 2.854Z"/>
         </svg>
       </button>
       <div class="video-overlay-content">
         <div class="video-overlay-player-container">
-          <video id="overlay-video-player" playsinline controls>
-            <!-- Source will be added dynamically -->
-          </video>
+          <video id="overlay-video-player" playsinline controls></video>
         </div>
         <div class="video-overlay-info">
           <div class="video-overlay-info-row">
@@ -115,7 +110,7 @@
             </div>
             <h2 id="overlay-video-title"></h2>
             <div class="video-overlay-actions">
-              <button id="overlay-favorite-btn" class="favorite-btn">
+              <button type="button" id="overlay-favorite-btn" class="favorite-btn" aria-pressed="false">
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="favorite-icon-outline">
                   <path d="M2.866 14.85c-.078.444.36.791.746.593l4.39-2.256 4.389 2.256c.386.198.824-.149.746-.592l-.83-4.73 3.522-3.356c.33-.314.16-.888-.282-.95l-4.898-.696L8.465.792a.513.513 0 0 0-.927 0L5.354 5.12l-4.898.696c-.441.062-.612.636-.283.95l3.523 3.356-.83 4.73z"/>
                 </svg>
@@ -125,15 +120,15 @@
                 <span class="favorite-text">Favorite</span>
               </button>
               <div class="overlay-share-container">
-                <button id="overlay-share-toggle-btn" class="btn share-btn">
+                <button type="button" id="overlay-share-toggle-btn" class="btn share-btn" aria-controls="overlay-share-popover" aria-expanded="false">
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
                     <path d="M13.5 1a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM11 2.5a2.5 2.5 0 1 1 .603 1.628l-6.718 3.12a2.499 2.499 0 0 1 0 1.504l6.718 3.12a2.5 2.5 0 1 1-.488.876l-6.718-3.12a2.5 2.5 0 1 1 0-3.256l6.718-3.12A2.5 2.5 0 0 1 11 2.5zm-8.5 4a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zm11 5.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/>
                   </svg>
                   <span class="share-text">Share</span>
                 </button>
                 <div id="overlay-share-popover" class="share-popover">
-                  <button id="overlay-copy-base-link-btn" class="popover-btn">Copy Link</button>
-                  <button id="overlay-copy-timestamp-link-btn" class="popover-btn">Copy Link at Current Time</button>
+                  <button type="button" id="overlay-copy-base-link-btn" class="popover-btn">Copy Link</button>
+                  <button type="button" id="overlay-copy-timestamp-link-btn" class="popover-btn">Copy Link at Current Time</button>
                   <span id="overlay-popover-current-time" class="popover-time-display"></span>
                 </div>
               </div>
@@ -144,10 +139,10 @@
     </div>
   </div>
 
-  <script src="js/utils.js"></script>
-  <script src="js/video-preview.js"></script>
-  <!-- Plyr for video overlay -->
-  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
-  <script src="js/main.js"></script>
+  <!-- Plyr (vendor/plyr) is loaded on demand by js/player.js: on the first card hover or overlay open -->
+  <script defer src="js/utils.js"></script>
+  <script defer src="js/video-preview.js"></script>
+  <script defer src="js/player.js"></script>
+  <script defer src="js/main.js"></script>
 </body>
 </html>

@@ -71,3 +71,60 @@ describe('VideoUtils.appUrl', () => {
     expect(utils.appUrl('/watch/5')).toBe('/watch/5');
   });
 });
+
+describe('VideoUtils.formatClock', () => {
+  test('formats below and above one hour', () => {
+    const utils = loadUtilsWithBase('/');
+
+    expect(utils.formatClock(0)).toBe('00:00');
+    expect(utils.formatClock(65)).toBe('01:05');
+    expect(utils.formatClock(1500.9)).toBe('25:00');
+    expect(utils.formatClock(3599)).toBe('59:59');
+    expect(utils.formatClock(3600)).toBe('1:00:00');
+    expect(utils.formatClock(4530)).toBe('1:15:30');
+    expect(utils.formatClock(null)).toBe('00:00');
+    expect(utils.formatClock(-5)).toBe('00:00');
+  });
+
+  test('formatVideoDuration prefers the numeric duration and falls back to the server string', () => {
+    const utils = loadUtilsWithBase('/');
+
+    expect(utils.formatVideoDuration({ duration: 4530, duration_formatted: '75:30' })).toBe('1:15:30');
+    expect(utils.formatVideoDuration({ duration: null, duration_formatted: '02:00' })).toBe('02:00');
+    expect(utils.formatVideoDuration({})).toBe('');
+  });
+});
+
+describe('VideoUtils favorites', () => {
+  beforeEach(() => localStorage.clear());
+
+  test('toggles and persists string ids', () => {
+    const utils = loadUtilsWithBase('/');
+
+    expect(utils.toggleFavorite(42)).toBe(true);
+    expect(utils.isFavorite('42')).toBe(true);
+    expect(JSON.parse(localStorage.getItem('videoFavorites'))).toEqual(['42']);
+    expect(utils.toggleFavorite('42')).toBe(false);
+    expect(utils.isFavorite('42')).toBe(false);
+    expect(JSON.parse(localStorage.getItem('videoFavorites'))).toEqual([]);
+  });
+
+  test('corrupted storage does not break rendering', () => {
+    localStorage.setItem('videoFavorites', '{not json');
+    const utils = loadUtilsWithBase('/');
+
+    expect(utils.isFavorite('1')).toBe(false);
+    expect(utils.toggleFavorite('1')).toBe(true);
+    expect(JSON.parse(localStorage.getItem('videoFavorites'))).toEqual(['1']);
+  });
+
+  test('reloadFavorites picks up changes made by another page', () => {
+    const utils = loadUtilsWithBase('/');
+    expect(utils.isFavorite('7')).toBe(false);
+
+    localStorage.setItem('videoFavorites', JSON.stringify(['7']));
+    expect(utils.isFavorite('7')).toBe(false); // cached until reloaded
+    utils.reloadFavorites();
+    expect(utils.isFavorite('7')).toBe(true);
+  });
+});

@@ -1,391 +1,294 @@
 const sqlite3 = require('sqlite3');
-const { open } = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 
-// Ensure the db directory exists
-const dbDir = process.env.DB_DIR || path.join(__dirname, '..', 'data', 'db');
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
+const defaultDbDir = process.env.DB_DIR || path.join(__dirname, '..', 'data', 'db');
+const defaultDbPath = path.join(defaultDbDir, 'videos.db');
 
-const dbPath = path.join(dbDir, 'videos.db');
+// Columns added after the original schema. Applied idempotently at startup.
+const MIGRATION_COLUMNS = [
+  ['death_timestamps', 'TEXT'],
+  ['width', 'INTEGER'],
+  ['height', 'INTEGER'],
+  ['preview_clips', 'TEXT'],
+  ['preview_generation_status', "TEXT DEFAULT 'pending'"],
+  ['preview_generation_date', 'TEXT'],
+  ['metadata', 'TEXT'],
+  ['metadata_mtime', 'TEXT'], // "<mtimeMs>:<size>" of the sidecar last parsed, 'none' = no sidecar
+  ['preview_attempts', 'INTEGER DEFAULT 0'], // failed automatic attempts for this file version
+  ['preview_source_mtime', 'INTEGER'] // video mtimeMs when the preview status was recorded
+];
 
-/**
- * Initialize the database and create tables if they don't exist
- */
-async function initializeDatabase() {
+// Every column except the multi-MB `metadata` sidecar blob.
+const ROW_COLUMNS = [
+  'id',
+  'title',
+  'path',
+  'duration',
+  'width',
+  'height',
+  'added_date',
+  'thumbnail_path',
+  'death_timestamps',
+  'preview_clips',
+  'preview_generation_status',
+  'preview_generation_date'
+].join(', ');
+
+// Exactly the columns lib/client-video.js toVideoCard reads.
+const CARD_COLUMNS = [
+  'id',
+  'title',
+  'duration',
+  'width',
+  'height',
+  'added_date',
+  'thumbnail_path',
+  'death_timestamps',
+  'preview_clips',
+  'preview_generation_status'
+].join(', ');
+
+// Whitelisted ORDER BY clauses. `id` breaks ties so pagination is stable.
+const ORDER_BY = {
+  title_asc: 'ORDER BY title COLLATE NOCASE ASC, id ASC',
+  title_desc: 'ORDER BY title COLLATE NOCASE DESC, id DESC',
+  date_added_asc: 'ORDER BY added_date ASC, id ASC',
+  date_added_desc: 'ORDER BY added_date DESC, id DESC'
+};
+
+/** @returns {Promise<number>} changed rows */
+function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
-    const db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        return reject(err);
-      }
-
-      // Use db.serialize to ensure sequential execution
-      db.serialize(() => {
-        // Create videos table
-        db.run(`
-          CREATE TABLE IF NOT EXISTS videos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            path TEXT NOT NULL UNIQUE,
-            duration INTEGER,
-            width INTEGER,  -- New column for video width
-            height INTEGER, -- New column for video height
-            added_date TEXT DEFAULT CURRENT_TIMESTAMP,
-            thumbnail_path TEXT,
-            death_timestamps TEXT -- Added column for JSON death timestamps
-          )
-        `, (err) => {
-          if (err) return reject(err);
-
-          // Create title index
-          db.run(`CREATE INDEX IF NOT EXISTS idx_videos_title ON videos (title);`, (err) => {
-            if (err) return reject(err);
-
-            // Create added_date index
-            db.run(`CREATE INDEX IF NOT EXISTS idx_videos_added_date ON videos (added_date);`, (err) => {
-              if (err) return reject(err);
-
-              // Attempt to add death_timestamps column (ignore duplicate error)
-              db.run(`ALTER TABLE videos ADD COLUMN death_timestamps TEXT`, (err) => {
-                if (err && !err.message.includes('duplicate column name')) {
-                  // Only reject if it's a real error, not just column already exists
-                  return reject(err);
-                }
-                // Attempt to add width column (ignore duplicate error)
-                db.run(`ALTER TABLE videos ADD COLUMN width INTEGER`, (err) => {
-                  if (err && !err.message.includes('duplicate column name')) {
-                    return reject(err);
-                  }
-                  // Attempt to add height column (ignore duplicate error)
-                  db.run(`ALTER TABLE videos ADD COLUMN height INTEGER`, (err) => {
-                    if (err && !err.message.includes('duplicate column name')) {
-                      return reject(err);
-                    }
-                    // Attempt to add preview_clips column (ignore duplicate error)
-                    db.run(`ALTER TABLE videos ADD COLUMN preview_clips TEXT`, (err) => {
-                      if (err && !err.message.includes('duplicate column name')) {
-                        return reject(err);
-                      }
-                      // Attempt to add preview_generation_status column (ignore duplicate error)
-                      db.run(`ALTER TABLE videos ADD COLUMN preview_generation_status TEXT DEFAULT 'pending'`, (err) => {
-                        if (err && !err.message.includes('duplicate column name')) {
-                          return reject(err);
-                        }
-                        // Attempt to add preview_generation_date column (ignore duplicate error)
-                        db.run(`ALTER TABLE videos ADD COLUMN preview_generation_date TEXT`, (err) => {
-                          if (err && !err.message.includes('duplicate column name')) {
-                            return reject(err);
-                          }
-                          // Attempt to add metadata column (ignore duplicate error)
-                          db.run(`ALTER TABLE videos ADD COLUMN metadata TEXT`, (err) => {
-                            if (err && !err.message.includes('duplicate column name')) {
-                              return reject(err);
-                            }
-                            // All steps completed successfully
-                            resolve(db);
-                          });
-                        });
-                      });
-                    });
-                  });
-                });
-              });
-            });
-          });
-        });
-      }); // End of db.serialize
+    db.run(sql, params, function onRun(err) {
+      return err ? reject(err) : resolve(this.changes);
     });
   });
 }
 
-/**
- * Get videos with pagination, optional search, and sorting
- */
-function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort = 'date_added_desc') {
+function get(db, sql, params = []) {
   return new Promise((resolve, reject) => {
-    const offset = (page - 1) * limit;
-    const listColumns = [
-      'id',
-      'title',
-      'path',
-      'duration',
-      'width',
-      'height',
-      'added_date',
-      'thumbnail_path',
-      'death_timestamps',
-      'preview_generation_status',
-      'preview_generation_date',
-      'preview_clips'
-    ].join(', ');
+    db.get(sql, params, (err, row) => (err ? reject(err) : resolve(row)));
+  });
+}
 
-    let query = `SELECT ${listColumns} FROM videos`;
-    let countQuery = 'SELECT COUNT(*) as totalCount FROM videos';
-    const params = [];
-    const countParams = [];
+function all(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
+  });
+}
 
-    if (searchQuery) {
-      const searchPattern = `%${searchQuery}%`;
-      query += ' WHERE title LIKE ? COLLATE NOCASE';
-      countQuery += ' WHERE title LIKE ? COLLATE NOCASE';
-      params.push(searchPattern);
-      countParams.push(searchPattern);
+function exec(db, sql) {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+function openDatabase(filename) {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(filename, (err) => (err ? reject(err) : resolve(db)));
+  });
+}
+
+function closeDatabase(db) {
+  return new Promise((resolve, reject) => {
+    db.close((err) => (err ? reject(err) : resolve()));
+  });
+}
+
+/**
+ * Open the database, apply connection PRAGMAs and bring the schema up to date.
+ * @param {string} [filename] - SQLite filename; defaults to $DB_DIR/videos.db.
+ *   Tests pass ':memory:'.
+ */
+async function initializeDatabase(filename = defaultDbPath) {
+  if (filename === defaultDbPath) {
+    fs.mkdirSync(defaultDbDir, { recursive: true });
+  }
+
+  const db = await openDatabase(filename);
+  try {
+    // busy_timeout first so the WAL switch itself waits for other connections.
+    await exec(db, `
+      PRAGMA busy_timeout = 5000;
+      PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL;
+    `);
+
+    await exec(db, `
+      CREATE TABLE IF NOT EXISTS videos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        path TEXT NOT NULL UNIQUE,
+        duration INTEGER,
+        width INTEGER,
+        height INTEGER,
+        added_date TEXT DEFAULT CURRENT_TIMESTAMP,
+        thumbnail_path TEXT,
+        death_timestamps TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_videos_title ON videos (title);
+      CREATE INDEX IF NOT EXISTS idx_videos_added_date ON videos (added_date);
+    `);
+
+    const existingColumns = new Set((await all(db, 'PRAGMA table_info(videos)')).map((column) => column.name));
+    for (const [name, type] of MIGRATION_COLUMNS) {
+      if (!existingColumns.has(name)) {
+        await run(db, `ALTER TABLE videos ADD COLUMN ${name} ${type}`);
+      }
     }
 
-    let orderByClause = 'ORDER BY added_date DESC';
-    switch (sort) {
-      case 'title_asc':
-        orderByClause = 'ORDER BY title COLLATE NOCASE ASC';
-        break;
-      case 'title_desc':
-        orderByClause = 'ORDER BY title COLLATE NOCASE DESC';
-        break;
-      case 'date_added_asc':
-        orderByClause = 'ORDER BY added_date ASC';
-        break;
-      case 'date_added_desc':
-      default:
-        orderByClause = 'ORDER BY added_date DESC';
-        break;
-    }
-
-    query += ` ${orderByClause} LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    db.get(countQuery, countParams, (countErr, countRow) => {
-      if (countErr) {
-        reject(countErr);
-        return;
-      }
-
-      db.all(query, params, (listErr, rows) => {
-        if (listErr) {
-          reject(listErr);
-          return;
-        }
-        resolve({ videos: rows, totalCount: countRow.totalCount });
-      });
-    });
-  });
+    return db;
+  } catch (error) {
+    await closeDatabase(db).catch(() => {});
+    throw error;
+  }
 }
 
+async function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort = 'date_added_desc') {
+  const offset = (page - 1) * limit;
+  // Escape LIKE wildcards so `%` and `_` in the search term match literally.
+  const where = searchQuery ? " WHERE title LIKE ? ESCAPE '\\' COLLATE NOCASE" : '';
+  const whereParams = searchQuery ? [`%${String(searchQuery).replace(/[\\%_]/g, '\\$&')}%`] : [];
+  const orderBy = Object.hasOwn(ORDER_BY, sort) ? ORDER_BY[sort] : ORDER_BY.date_added_desc;
 
-/**
- * Get all videos from the database (Deprecated by getVideosPaginated)
- */
-function getAllVideos(db) {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT * FROM videos ORDER BY added_date DESC', (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(rows);
-    });
-  });
+  const countRow = await get(db, `SELECT COUNT(*) AS totalCount FROM videos${where}`, whereParams);
+  const videos = await all(
+    db,
+    `SELECT ${CARD_COLUMNS} FROM videos${where} ${orderBy} LIMIT ? OFFSET ?`,
+    [...whereParams, limit, offset]
+  );
+  return { videos, totalCount: countRow.totalCount };
 }
 
-/**
- * Get a video by ID
- */
+/** Every column except the large `metadata` blob. */
 function getVideoById(db, id) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT *, width, height FROM videos WHERE id = ?', [id], (err, row) => { // Select width and height
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(row);
-    });
-  });
+  return get(db, `SELECT ${ROW_COLUMNS} FROM videos WHERE id = ?`, [id]);
+}
+
+/** The few columns needed to stream a video or render its watch page. */
+function getVideoStreamInfo(db, id) {
+  return get(db, 'SELECT id, title, path, width, height FROM videos WHERE id = ?', [id]);
 }
 
 /**
- * Add a new video to the database
+ * Insert a video. If the path already exists, keep that row and its id (share
+ * links) and refresh only what is derived from the video file itself (title,
+ * duration, dimensions, and the thumbnail when one is passed); the date added,
+ * sidecar-derived and preview columns are left alone.
+ * @returns {Promise<number>} the row id
  */
-function addVideo(db, video) {
-  return new Promise((resolve, reject) => {
-    // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata } = video;
-    
-    db.run(
-      'INSERT OR REPLACE INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata],
-      function(err) {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(this.lastID);
-      }
-    );
-  });
+async function addVideo(db, video) {
+  const { title, path: videoPath, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime } = video;
+  const row = await get(
+    db,
+    `INSERT INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET
+       title = excluded.title,
+       duration = excluded.duration,
+       width = excluded.width,
+       height = excluded.height,
+       thumbnail_path = COALESCE(excluded.thumbnail_path, videos.thumbnail_path)
+     RETURNING id`,
+    [title, videoPath, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime]
+  );
+  return row.id;
 }
 
-/**
- * Update a video's thumbnail path
- */
-function updateVideoThumbnail(db, id, thumbnail_path) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      'UPDATE videos SET thumbnail_path = ? WHERE id = ?',
-      [thumbnail_path, id],
-      function(err) {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(this.changes);
-      }
-    );
-  });
+/** Card-shaped row by path (no `metadata`), for watcher updates. */
+function getVideoCardByPath(db, videoPath) {
+  return get(db, `SELECT ${CARD_COLUMNS} FROM videos WHERE path = ?`, [videoPath]);
 }
 
-/**
- * Update a video's preview data
- */
-function updateVideoPreview(db, id, preview_clips, preview_generation_status, preview_generation_date) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      'UPDATE videos SET preview_clips = ?, preview_generation_status = ?, preview_generation_date = ? WHERE id = ?',
-      [preview_clips, preview_generation_status, preview_generation_date, id],
-      function(err) {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(this.changes);
-      }
-    );
-  });
-}
-
-/**
- * Check if a video exists in the database by path
- */
-function getVideoByPath(db, path) {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM videos WHERE path = ?', [path], (err, row) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(row);
-    });
-  });
-}
-
-/**
- * Update an existing video in the database
- */
-function updateVideo(db, id, video) {
-  return new Promise((resolve, reject) => {
-    // Destructure all expected fields, including the new ones
-    const { title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata } = video;
-    
-    db.run(
-      'UPDATE videos SET title = ?, path = ?, duration = ?, width = ?, height = ?, thumbnail_path = ?, added_date = ?, death_timestamps = ?, preview_clips = ?, preview_generation_status = ?, preview_generation_date = ?, metadata = ? WHERE id = ?',
-      [title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, preview_clips, preview_generation_status, preview_generation_date, metadata, id],
-      function(err) {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(this.changes);
-      }
-    );
-  });
-}
-
-/**
- * Get all video paths from the database
- */
-function getAllVideoPaths(db) {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT id, path FROM videos', (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(rows);
-    });
-  });
-}
-
-/**
- * Delete a video by ID
- */
 function deleteVideo(db, id) {
-  return new Promise((resolve, reject) => {
-    db.run('DELETE FROM videos WHERE id = ?', [id], function(err) {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(this.changes);
-    });
-  });
+  return run(db, 'DELETE FROM videos WHERE id = ?', [id]);
 }
 
 function getVideosByIds(db, ids) {
   if (!Array.isArray(ids) || ids.length === 0) {
     return Promise.resolve([]);
   }
-
   const placeholders = ids.map(() => '?').join(', ');
-  const columns = [
-    'id',
-    'title',
-    'duration',
-    'width',
-    'height',
-    'added_date',
-    'thumbnail_path',
-    'death_timestamps',
-    'preview_clips',
-    'preview_generation_status'
-  ].join(', ');
+  return all(db, `SELECT ${CARD_COLUMNS} FROM videos WHERE id IN (${placeholders})`, ids);
+}
 
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT ${columns} FROM videos WHERE id IN (${placeholders})`, ids, (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(rows);
-    });
-  });
+/** Rows with sidecar metadata, for advanced search. */
+function getVideosWithMetadata(db) {
+  return all(db, "SELECT id, title, path, duration, added_date, metadata FROM videos WHERE metadata IS NOT NULL AND metadata != ''");
+}
+
+// Scanner state for every row, without the metadata blob.
+const SCAN_COLUMNS = [
+  'id',
+  'title',
+  'path',
+  'duration',
+  'width',
+  'height',
+  'thumbnail_path',
+  'death_timestamps',
+  'preview_clips',
+  'preview_generation_status',
+  'metadata_mtime',
+  'preview_attempts',
+  'preview_source_mtime'
+].join(', ');
+
+const UPDATABLE_VIDEO_FIELDS = new Set([
+  'title',
+  'duration',
+  'width',
+  'height',
+  'thumbnail_path',
+  'death_timestamps',
+  'metadata',
+  'metadata_mtime',
+  'preview_clips',
+  'preview_generation_status',
+  'preview_generation_date',
+  'preview_attempts',
+  'preview_source_mtime'
+]);
+
+function getVideosForScan(db) {
+  return all(db, `SELECT ${SCAN_COLUMNS} FROM videos`);
+}
+
+function getVideoScanStateByPath(db, videoPath) {
+  return get(db, `SELECT ${SCAN_COLUMNS} FROM videos WHERE path = ?`, [videoPath]);
 }
 
 /**
- * Get all videos that have metadata for advanced search
+ * Update only the given (whitelisted) columns of one video; undefined values are skipped.
+ * @returns {Promise<number>} changed rows
  */
-function getVideosWithMetadata(db) {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT id, title, path, duration, added_date, metadata FROM videos WHERE metadata IS NOT NULL AND metadata != ""', (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(rows);
-    });
-  });
+async function updateVideoFields(db, id, fields) {
+  const names = Object.keys(fields || {}).filter((name) => fields[name] !== undefined);
+  for (const name of names) {
+    if (!UPDATABLE_VIDEO_FIELDS.has(name)) {
+      throw new Error(`updateVideoFields: column not allowed: ${name}`);
+    }
+  }
+  if (names.length === 0) {
+    return 0;
+  }
+  const assignments = names.map((name) => `${name} = ?`).join(', ');
+  return run(db, `UPDATE videos SET ${assignments} WHERE id = ?`, [...names.map((name) => fields[name]), id]);
 }
 
 module.exports = {
   initializeDatabase,
-  getAllVideos,
+  closeDatabase,
   getVideoById,
+  getVideoStreamInfo,
   addVideo,
-  updateVideoThumbnail,
-  updateVideoPreview,
-  getVideoByPath,
-  updateVideo,
-  getAllVideoPaths,
+  getVideoCardByPath,
   deleteVideo,
   getVideosPaginated,
   getVideosWithMetadata,
-  getVideosByIds
+  getVideosByIds,
+  getVideosForScan,
+  getVideoScanStateByPath,
+  updateVideoFields
 };

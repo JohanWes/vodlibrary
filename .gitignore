@@ -6,16 +6,21 @@ node_modules/
 .env.test
 .env.local
 
-# Database files
+# Database files (plus SQLite journal/WAL side files)
 db/videos.db
+db/*.db-wal
+db/*.db-shm
+db/*.db-journal
+data/*.db*
 
 # Thumbnails
 public/thumbnails/*
-!public/thumbnails/.gitkeep
 
-# Logs
+# Logs (server.log is written by scripts/start_server.sh, rotated to server.log.1)
 logs
 *.log
+server.log
+server.log.*
 npm-debug.log*
 
 # Runtime data
@@ -28,7 +33,6 @@ pids
 lib-cov
 
 # Coverage directory used by tools like istanbul
-coverage
 coverage/
 
 # nyc test coverage
@@ -64,8 +68,9 @@ public/previews/
 # Daemon executables
 daemon/
 
-# Test videos directory
+# Test videos / test data directories
 test-videos/
+test-data/
 
 # Other
 IMPLEMENTATION_SUMMARY.md
@@ -81,3 +86,6 @@ Thumbs.db
 
 # Memory Bank
 memory-bank/
+
+# Stale nested git repo from an old clone (kept locally, never tracked)
+.git_disabled/

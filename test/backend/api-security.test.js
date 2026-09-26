@@ -73,6 +73,7 @@ describe('API security and validation', () => {
     getVideosByIds.mockResolvedValue([]);
     OpenRouterClient.isAvailableMock.mockReturnValue(true);
     OpenRouterClient.searchVideosMock.mockResolvedValue([]);
+    apiRoutes.clearSearchCache();
     app = buildApp();
   });
 
@@ -312,6 +313,130 @@ describe('API security and validation', () => {
       expect(response.body.limit).toBe(2);
       expect(getVideosByIds).toHaveBeenCalledTimes(1);
       expect(getVideosByIds).toHaveBeenCalledWith(app.locals.db, [3]);
+    });
+  });
+
+  describe('advanced search result cache', () => {
+    const rows = [1, 2, 3].map((id) => ({ id, title: `Video ${id}`, path: `/mnt/${id}.mp4` }));
+    const search = (query, extra = {}) => request(app)
+      .post('/api/videos/advanced-search')
+      .send({ query, limit: 2, ...extra });
+
+    beforeEach(() => {
+      process.env.ADVANCED_SEARCH_ENABLED = 'true';
+      getVideosWithMetadata.mockResolvedValue(rows.map(({ id }) => ({ id, metadata: '{}' })));
+      getVideosByIds.mockImplementation(async (_db, ids) => rows.filter((row) => ids.includes(row.id)));
+      OpenRouterClient.searchVideosMock.mockResolvedValue([{ id: 3 }, { id: 1 }, { id: 2 }]);
+    });
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    test('paging through one query calls the LLM once', async () => {
+      const first = await search('priory run', { page: 1 }).expect(200);
+      const second = await search('priory run', { page: 2 }).expect(200);
+
+      expect(first.body.videos.map((video) => video.id)).toEqual([3, 1]);
+      expect(second.body.videos.map((video) => video.id)).toEqual([2]);
+      expect(first.body.totalCount).toBe(3);
+      expect(second.body.totalCount).toBe(3);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+      expect(getVideosWithMetadata).toHaveBeenCalledTimes(1);
+      expect(getVideosByIds).toHaveBeenNthCalledWith(1, app.locals.db, [3, 1]);
+      expect(getVideosByIds).toHaveBeenNthCalledWith(2, app.locals.db, [2]);
+    });
+
+    test('queries differing only in case and whitespace share one entry', async () => {
+      await search('Priory Run').expect(200);
+      await search('  priory   run ', { page: 2 }).expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+
+      await search('priory runs').expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(2);
+    });
+
+    test('concurrent page requests share one in-flight LLM call', async () => {
+      let resolveSearch;
+      OpenRouterClient.searchVideosMock.mockReturnValue(new Promise((resolve) => {
+        resolveSearch = resolve;
+      }));
+
+      const pending = [search('boss', { page: 1 }), search('boss', { page: 2 })].map((req) => req.then((res) => res));
+      // Both requests have passed the availability check, i.e. reached the cache.
+      while (OpenRouterClient.isAvailableMock.mock.calls.length < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+      resolveSearch([{ id: 1 }, { id: 2 }, { id: 3 }]);
+      const [first, second] = await Promise.all(pending);
+
+      expect(first.body.videos.map((video) => video.id)).toEqual([1, 2]);
+      expect(second.body.videos.map((video) => video.id)).toEqual([3]);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('a failed LLM call is not cached', async () => {
+      OpenRouterClient.searchVideosMock.mockRejectedValueOnce(new Error('OpenRouter API error: 502'));
+
+      await search('wipe').expect(503);
+      const retry = await search('wipe').expect(200);
+
+      expect(retry.body.totalCount).toBe(3);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(2);
+    });
+
+    test('"no metadata yet" is not cached', async () => {
+      getVideosWithMetadata.mockResolvedValueOnce([]);
+
+      const empty = await search('wipe').expect(200);
+      expect(empty.body.message).toBe('No videos with metadata available for advanced search');
+      expect(OpenRouterClient.searchVideosMock).not.toHaveBeenCalled();
+
+      const later = await search('wipe').expect(200);
+      expect(later.body.totalCount).toBe(3);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+    });
+
+    test('entries expire after 10 minutes', async () => {
+      const start = Date.now();
+      const now = jest.spyOn(Date, 'now').mockReturnValue(start);
+      await search('wipe').expect(200);
+
+      now.mockReturnValue(start + 10 * 60 * 1000 - 1);
+      await search('wipe', { page: 2 }).expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+
+      now.mockReturnValue(start + 10 * 60 * 1000 + 1);
+      await search('wipe', { page: 2 }).expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(2);
+    });
+
+    test('the cache holds at most 50 queries and evicts the oldest first', async () => {
+      for (let i = 0; i < 51; i += 1) {
+        await search(`query ${i}`).expect(200);
+      }
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(51);
+
+      await search('query 50').expect(200);
+      await search('query 1').expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(51);
+
+      await search('query 0').expect(200);
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(52);
+    });
+
+    test('disabling the feature returns 400 JSON even for a cached query, without the LLM', async () => {
+      await search('wipe').expect(200);
+      process.env.ADVANCED_SEARCH_ENABLED = 'false';
+
+      const response = await search('wipe', { page: 2 }).expect(400);
+
+      expect(response.headers['content-type']).toMatch(/application\/json/);
+      expect(response.body).toEqual({ error: 'Advanced search is not enabled' });
+      expect(OpenRouterClient.searchVideosMock).toHaveBeenCalledTimes(1);
+      expect(getVideosByIds).toHaveBeenCalledTimes(1);
     });
   });
 

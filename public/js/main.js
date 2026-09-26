@@ -1,105 +1,105 @@
-document.addEventListener('DOMContentLoaded', async () => {
-  // Load utility functions
-  const { showToast, getPlaceholderThumbnail, addUtilStyles, getVODsName, isFavorite, getFavorites } = window.VideoUtils;
-  
-  // Add utility styles
-  addUtilStyles();
-  
-  // Initialize video preview manager
-  let videoPreviewManager;
-  try {
-    videoPreviewManager = new window.VideoPreviewManager();
-    window.videoPreviewManager = videoPreviewManager;
-    console.log('Video preview manager initialized successfully');
-  } catch (error) {
-    console.warn('Failed to initialize video preview manager:', error);
-  }
-  
-  const vodsNamePromise = getVODsName();
+document.addEventListener('DOMContentLoaded', () => {
+  const {
+    showToast,
+    getPlaceholderThumbnail,
+    getAppConfig,
+    isFavorite,
+    toggleFavorite,
+    reloadFavorites,
+    formatVideoDuration
+  } = window.VideoUtils;
+  const PlayerCore = window.PlayerCore;
+  const videoPreviewManager = new window.VideoPreviewManager();
+
   let vodsName = 'VODlibrary';
-  
+
   // DOM Elements
   const videosGrid = document.getElementById('videos-grid');
   const refreshBtn = document.getElementById('refresh-btn');
+  const refreshIcon = refreshBtn.querySelector('svg');
+  const refreshLabel = refreshBtn.querySelector('.refresh-label');
   const sortSelect = document.getElementById('sort-select');
   const searchInput = document.getElementById('search-input');
+  const searchContainer = searchInput.closest('.search-container');
+  const searchIcon = searchContainer.querySelector('.search-icon');
   const searchButton = document.getElementById('search-button');
   const advancedSearchToggle = document.getElementById('advanced-search-toggle');
+  const advancedSearchLabel = advancedSearchToggle.closest('.advanced-search-label');
   const favoritesToggle = document.getElementById('favorites-toggle');
   const videosLoadSentinel = document.getElementById('videos-load-sentinel');
-  const scanStatusElement = document.getElementById('scan-status'); // Get scan status element
-  const loadingIndicator = document.createElement('div'); // Create loading indicator dynamically
-  loadingIndicator.className = 'loading';
-  loadingIndicator.style.display = 'none';
-  videosGrid.parentNode.appendChild(loadingIndicator); // Append near the grid
+  const scanStatusElement = document.getElementById('scan-status');
+  const overlay = document.getElementById('video-overlay');
+  const overlayContainer = overlay.querySelector('.video-overlay-container');
+  const overlayBackdrop = overlay.querySelector('.video-overlay-backdrop');
+  const overlayPlayerContainer = overlay.querySelector('.video-overlay-player-container');
+  const overlayCloseButton = overlay.querySelector('.video-overlay-close');
+  const overlayFavoriteBtn = document.getElementById('overlay-favorite-btn');
+  const backgroundRegions = [...document.querySelectorAll('body > header, body > main, body > footer')];
 
-  if (videosGrid) {
-    videosGrid.addEventListener('click', handleVideoGridClick);
-    videosGrid.addEventListener('auxclick', handleVideoGridAuxClick);
-    videosGrid.addEventListener('mousedown', handleVideoGridMouseDown);
-    videosGrid.addEventListener('pointermove', handleVideoGridPointerMove);
-    videosGrid.addEventListener('pointerleave', handleVideoGridPointerLeave);
-    videosGrid.addEventListener('pointerdown', handleVideoGridPointerDown);
-    videosGrid.addEventListener('pointerup', handleVideoGridPointerUpOrCancel);
-    videosGrid.addEventListener('pointercancel', handleVideoGridPointerUpOrCancel);
-    window.addEventListener('scroll', clearActiveCardTilt, { passive: true });
-    window.addEventListener('blur', clearActiveCardTilt);
-    window.addEventListener('pointerup', clearTouchActiveCards);
-    window.addEventListener('pointercancel', clearTouchActiveCards);
-  }
+  const loadingIndicator = document.createElement('div');
+  loadingIndicator.className = 'loading';
+  loadingIndicator.hidden = true;
+  videosGrid.after(loadingIndicator);
+
+  const DEFAULT_SORT = 'date_added_desc';
+  const PAGE_SIZE = 20;
+  const ADVANCED_LIMIT = 100; // Advanced (LLM) results are requested as one page; no infinite scroll
+  const CARD_TILT_MAX_DEGREES = 5;
+  const SSE_MAX_FAILURES = 5;
+  const ADVANCED_PLACEHOLDER = "Describe what you're looking for (e.g., 'find Cinderbrew Meadery with Evandis deaths')...";
 
   // State Variables
-  let allVideos = []; // Holds all currently loaded videos across pages
-  let sortBy = 'date_added_desc'; // Default sort by date added (newest)
-  let searchQuery = '';
+  let allVideos = []; // Every loaded video across pages, in display order (before the favorites filter)
+  let sortBy = DEFAULT_SORT;
+  let searchQuery = ''; // The query of the list being shown
+  let advancedQuery = false; // The list being shown comes from advanced search
+  let useAdvancedSearch = false; // The Advanced toggle: Enter / the search button run an advanced search
   let searchTimeout = null;
   let isLoading = false;
+  let freshLoadPending = false; // A non-append load is in flight; the grid shows its placeholder
   let showOnlyFavorites = false;
-  let useAdvancedSearch = false;
   let currentPage = 1;
-  let totalPages = 1;
-  let limit = 20; // Default limit, will be updated from API response - Reduced batch size for better scrolling performance
+  let limit = PAGE_SIZE;
   let totalVideos = 0;
-  let currentAbortController = null; // To cancel ongoing fetch requests
-  let scanPollingInterval = null; // Interval ID for scan status polling
-  let scanPollGeneration = 0;
-  let sseEventSource = null; // Variable to hold the EventSource instance
-  let hasScanRunThisSession = false; // Flag to track if scan initiated in this session
-  let pendingPage = null; // Track in-flight pagination requests
+  let offsetShift = 0; // Live adds (+) and deletes (-) inside the loaded range since the last page load
+  let listRequestSeq = 0; // Only the newest list request may touch state or the DOM
+  let listAbortController = null;
+  let renderGeneration = 0; // Bumped on every grid reset; stale chunked renders stop
+  let hasRenderedCards = false; // The card entry animation only plays on the first render
+  let pendingSseAdds = []; // Adds that arrived during a fresh load; applied once it lands
   let infiniteScrollObserver = null;
-  let overlayOpenTransitionCleanup = null;
-  let overlayCloseTransitionCleanup = null;
-  let overlayTransitionNonce = 0;
-  const parsedCardTiltMax = parseFloat(window.getComputedStyle(document.documentElement).getPropertyValue('--card-hover-rotate-max'));
-  const cardTiltMaxDegrees = Number.isFinite(parsedCardTiltMax) ? parsedCardTiltMax : 5;
+  let scanPollTimer = null;
+  let scanCheckSeq = 0;
+  let scanStatusClearTimer = null;
+  let scanWatched = false; // A scan was started here or seen running: report how it ends
+  let scanStartedHere = false;
+  let sseEventSource = null;
+  let sseFailures = 0;
+  const coarsePointerQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(pointer: coarse)') : null;
+  const reducedMotionQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   let activeTiltCard = null;
   let pendingTiltCard = null;
   let pendingTiltX = 0;
   let pendingTiltY = 0;
   let tiltAnimationFrameId = null;
-  
-  // Video overlay variables
-  let overlayPlyrPlayer = null; // Plyr instance for overlay
-  let overlayCurrentVideoId = null; // Current video ID in overlay
-  let overlayVideoMetadata = null; // Current video metadata
-  let overlayBaseShareUrl = null; // Base share URL for current video
-  const OVERLAY_OPEN_TRANSITION_MS = 220;
-  const OVERLAY_CLOSE_TRANSITION_MS = 180;
 
-  /**
-   * Debounce function
-   */
-  function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-      const later = () => {
-        clearTimeout(timeout);
-        func(...args);
-      };
-      clearTimeout(timeout);
-      timeout = setTimeout(later, wait);
-    };
-  }
+  // Video overlay state
+  let overlayPlayer = null;
+  let overlayCurrentVideoId = null;
+  let overlayGeneration = 0; // Bumped on every open/close; stale async work bails out
+  let overlayFetchController = null;
+  let overlayMediaListeners = null;
+  let overlayReadyTimer = null;
+  let overlayReturnFocus = null;
+  let overlayAnimations = [];
+  let historyBackPending = false; // Closing popped the overlay's history entry; the next popstate is ours
+  const overlayShareMenu = PlayerCore.bindShareMenu({
+    toggle: document.getElementById('overlay-share-toggle-btn'),
+    popover: document.getElementById('overlay-share-popover'),
+    copyBase: document.getElementById('overlay-copy-base-link-btn'),
+    copyTimestamp: document.getElementById('overlay-copy-timestamp-link-btn'),
+    timeDisplay: document.getElementById('overlay-popover-current-time')
+  }, () => overlayCurrentVideoId, () => overlayPlayer);
 
   function nextFrame() {
     return new Promise((resolve) => {
@@ -107,20 +107,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function isCoarsePointerDevice() {
-    return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
-  }
-
-  function canUseInteractiveCardTilt() {
-    return !isCoarsePointerDevice();
-  }
-
   function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
   }
 
+  // --- Card tilt (fine pointers only; touch feedback is CSS :active) ---
   function resetCardTilt(card) {
-    if (!card) return;
     card.style.setProperty('--card-rotate-x', '0deg');
     card.style.setProperty('--card-rotate-y', '0deg');
     card.classList.remove('is-tilting');
@@ -139,7 +131,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function updateCardTilt(card, clientX, clientY) {
-    if (!card) return;
     const rect = card.getBoundingClientRect();
     if (!rect.width || !rect.height) {
       resetCardTilt(card);
@@ -148,11 +139,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const normalizedX = clamp(((clientX - rect.left) / rect.width) * 2 - 1, -1, 1);
     const normalizedY = clamp(((clientY - rect.top) / rect.height) * 2 - 1, -1, 1);
-    const rotateX = (-normalizedY * cardTiltMaxDegrees).toFixed(2);
-    const rotateY = (normalizedX * cardTiltMaxDegrees).toFixed(2);
-
-    card.style.setProperty('--card-rotate-x', `${rotateX}deg`);
-    card.style.setProperty('--card-rotate-y', `${rotateY}deg`);
+    card.style.setProperty('--card-rotate-x', `${(-normalizedY * CARD_TILT_MAX_DEGREES).toFixed(2)}deg`);
+    card.style.setProperty('--card-rotate-y', `${(normalizedX * CARD_TILT_MAX_DEGREES).toFixed(2)}deg`);
     card.classList.add('is-tilting');
   }
 
@@ -180,31 +168,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  function clearTouchActiveCards() {
-    if (!videosGrid) return;
-    videosGrid.querySelectorAll('.video-card.is-touch-active').forEach((card) => {
-      card.classList.remove('is-touch-active');
-    });
-  }
-
   function handleVideoGridPointerMove(event) {
-    if (!videosGrid) return;
-    if (!canUseInteractiveCardTilt()) {
-      clearActiveCardTilt();
-      return;
-    }
-
     const card = event.target.closest('.video-card');
-    if (!card || !videosGrid.contains(card)) {
+    if (!card || (coarsePointerQuery && coarsePointerQuery.matches)) {
       clearActiveCardTilt();
       return;
     }
-
     queueCardTilt(card, event.clientX, event.clientY);
   }
 
   function handleVideoGridPointerLeave(event) {
-    if (!videosGrid) return;
     const nextTarget = event.relatedTarget;
     if (nextTarget && videosGrid.contains(nextTarget)) {
       return;
@@ -212,796 +185,562 @@ document.addEventListener('DOMContentLoaded', async () => {
     clearActiveCardTilt();
   }
 
-  function handleVideoGridPointerDown(event) {
-    if (!videosGrid || !isCoarsePointerDevice()) {
-      return;
-    }
-
-    const card = event.target.closest('.video-card');
-    if (!card || !videosGrid.contains(card)) {
-      return;
-    }
-
-    clearTouchActiveCards();
-    card.classList.add('is-touch-active');
+  // Warm Plyr on the first card hover so the first overlay opens without waiting for it.
+  function handleFirstCardHover(event) {
+    if (!event.target.closest('.video-card')) return;
+    videosGrid.removeEventListener('pointerover', handleFirstCardHover);
+    PlayerCore.loadPlyr().catch(() => {});
   }
 
-  function handleVideoGridPointerUpOrCancel(event) {
-    if (!videosGrid || !isCoarsePointerDevice()) {
-      return;
-    }
-
-    const card = event.target.closest('.video-card');
-    if (card && videosGrid.contains(card)) {
-      card.classList.remove('is-touch-active');
-    } else {
-      clearTouchActiveCards();
-    }
+  // --- Grid clicks ---
+  function renderGridFavorite(button, favorited) {
+    button.classList.toggle('favorited', favorited);
+    button.setAttribute('aria-pressed', String(favorited));
   }
 
-  /**
-   * Abort any ongoing fetch request
-   */
-  function abortPreviousFetch() {
-    if (currentAbortController) {
-      currentAbortController.abort();
-      console.log('Aborted previous fetch request.');
-    }
+  function findGridCard(videoId) {
+    const id = String(videoId);
+    return /^\d+$/.test(id) ? videosGrid.querySelector(`.video-card[data-id="${id}"]`) : null;
   }
-  
 
-  /**
-   * Delegate click handling within the videos grid
-   */
   function handleVideoGridClick(event) {
-    if (!videosGrid) return;
-
-    const favoriteIndicator = event.target.closest('.favorite-indicator-grid');
-    if (favoriteIndicator && videosGrid.contains(favoriteIndicator)) {
+    const favoriteButton = event.target.closest('.favorite-indicator-grid');
+    if (favoriteButton) {
       event.preventDefault();
-      event.stopPropagation();
-
-      const videoId = favoriteIndicator.dataset.videoId;
-      if (!videoId || !window.VideoUtils || typeof window.VideoUtils.toggleFavorite !== 'function') {
-        return;
-      }
-
-      const isNowFavorited = window.VideoUtils.toggleFavorite(videoId);
-      favoriteIndicator.classList.toggle('favorited', isNowFavorited);
-
-      const videoIndex = allVideos.findIndex(v => v.id.toString() === videoId);
-      if (videoIndex > -1) {
-        allVideos[videoIndex].is_favorite = isNowFavorited ? 1 : 0;
-      }
-
+      const isNowFavorited = toggleFavorite(favoriteButton.dataset.videoId);
+      renderGridFavorite(favoriteButton, isNowFavorited);
       showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
       return;
     }
 
+    // The card is a real link: modified clicks, middle-click and "open in new tab" stay native.
     const link = event.target.closest('.video-card-link');
-    if (!link || !videosGrid.contains(link)) {
+    if (!link || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
       return;
     }
-
-    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) {
-      // Allow native browser behavior for modified clicks
-      return;
-    }
-
-    const card = link.closest('.video-card');
-    if (!card) {
-      return;
-    }
-
-    const videoId = card.dataset.id;
-    if (!videoId) {
-      return;
-    }
-
     event.preventDefault();
-    openVideoOverlay(videoId, event);
+    openVideoOverlay(link.closest('.video-card').dataset.id, event);
+  }
+
+  // --- Grid content ---
+
+  /**
+   * Replace the grid content. Every non-append render goes through here so hover
+   * previews are torn down and stale chunked renders stop.
+   */
+  function resetGrid(...nodes) {
+    videoPreviewManager.hideAll();
+    clearActiveCardTilt();
+    renderGeneration += 1;
+    videosGrid.replaceChildren(...nodes);
   }
 
   /**
-   * Handle auxiliary clicks (e.g., middle mouse button) on the videos grid
+   * Show an empty or error message in the grid (no spinner)
    */
-  function handleVideoGridAuxClick(event) {
-    if (event.button !== 1 || !videosGrid) {
-      return;
-    }
+  function setGridMessage(text, { error = false } = {}) {
+    const message = document.createElement('div');
+    message.className = error ? 'empty-state is-error' : 'empty-state';
+    message.textContent = text;
+    resetGrid(message);
+  }
 
-    const link = event.target.closest('.video-card-link');
-    if (!link || !videosGrid.contains(link)) {
-      return;
+  function emptyGridMessage() {
+    if (showOnlyFavorites) {
+      return 'No favorite videos found. Add videos to your favorites while watching them.';
     }
+    if (searchQuery) {
+      return 'No videos found matching your search.';
+    }
+    return 'No videos found. Add videos to your library folder.';
+  }
 
-    event.preventDefault();
-    window.open(link.href, '_blank', 'noopener,noreferrer');
+  // --- Loading ---
+
+  function setAdvancedQuery(active) {
+    advancedQuery = active;
+    // Advanced results are ranked by relevance; the sort does not apply to them.
+    sortSelect.disabled = active;
+  }
+
+  function setAdvancedMode(enabled) {
+    useAdvancedSearch = enabled;
+    advancedSearchToggle.checked = enabled;
+    searchInput.placeholder = enabled ? ADVANCED_PLACEHOLDER : 'Search videos...';
+    searchContainer.classList.toggle('advanced-mode', enabled);
+    searchButton.hidden = !enabled;
+    if (!enabled) setAdvancedQuery(false);
   }
 
   /**
-   * Prevent middle-click auto-scroll on card links
+   * Hide the Advanced toggle for this session (server has it disabled)
    */
-  function handleVideoGridMouseDown(event) {
-    if (event.button !== 1 || !videosGrid) {
-      return;
-    }
-
-    const link = event.target.closest('.video-card-link');
-    if (link && videosGrid.contains(link)) {
-      event.preventDefault();
-    }
+  function hideAdvancedSearch() {
+    setAdvancedMode(false);
+    advancedSearchLabel.hidden = true;
+    searchContainer.classList.add('no-advanced');
   }
 
+  /**
+   * Fetch one page of videos (advanced search falls back to regular search in the same request)
+   * @returns {Promise<Object>} - { videos, totalCount, page, limit }
+   */
+  async function fetchVideoPage(page, signal) {
+    if (advancedQuery) {
+      const response = await fetch(appUrl('/api/videos/advanced-search'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: searchQuery, page: 1, limit: ADVANCED_LIMIT }),
+        signal
+      });
+      if (response.ok) {
+        return response.json();
+      }
+
+      const body = await response.json().catch(() => ({}));
+      if (response.status === 400 && /not enabled/i.test(body.error || '')) {
+        hideAdvancedSearch();
+        showToast('Advanced search is not enabled on this server. Showing regular results.', 'error');
+      } else if (body.fallback || response.status >= 500) {
+        setAdvancedMode(false);
+        showToast('Advanced search is unavailable right now. Showing regular results.', 'error');
+      } else {
+        throw new Error(body.error || `Advanced search failed (status: ${response.status})`);
+      }
+    }
+
+    const params = new URLSearchParams({ page: String(page), limit: String(PAGE_SIZE), sort: sortBy });
+    if (searchQuery) {
+      params.set('search', searchQuery);
+    }
+    const response = await fetch(appUrl(`/api/videos?${params}`), { signal });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch videos (status: ${response.status})`);
+    }
+    return response.json();
+  }
+
+  function hasMorePages() {
+    return !advancedQuery && allVideos.length < totalVideos;
+  }
 
   /**
-   * Load videos from the API with pagination
+   * Live adds and deletes shift OFFSET pagination. Request the page that holds the first
+   * video not loaded yet; any overlap with loaded videos is de-duplicated.
    */
-  async function loadVideos(page = 1, append = false) {
-    if (isLoading) return;
-    if (append && pendingPage === page) return;
-    
-    abortPreviousFetch(); // Abort previous request if any
-    currentAbortController = new AbortController();
-    const signal = currentAbortController.signal;
-    pendingPage = page;
+  function nextPageToLoad() {
+    return Math.max(1, Math.floor((currentPage * limit + offsetShift) / limit) + 1);
+  }
+
+  /**
+   * Load videos. A fresh load (append=false) supersedes and aborts any in-flight
+   * request; appends load the next page and are skipped while something is loading.
+   */
+  async function loadVideos(append = false) {
+    if (append && isLoading) return;
+
+    if (listAbortController) {
+      listAbortController.abort();
+    }
+    const controller = new AbortController();
+    listAbortController = controller;
+    const requestSeq = ++listRequestSeq;
+    const isCurrent = () => requestSeq === listRequestSeq;
+    const page = append ? nextPageToLoad() : 1;
+    const shiftAtRequest = append ? offsetShift : 0;
 
     isLoading = true;
-    loadingIndicator.style.display = 'block';
-    if (!append) {
-        videosGrid.innerHTML = ''; // Clear grid only if not appending (i.e., page 1 or new search/sort)
-        allVideos = []; // Reset the local video cache
+    freshLoadPending = !append;
+    if (append) {
+      loadingIndicator.hidden = false;
+    } else {
+      // Reuse the page's initial placeholder so the first load does not shift layout.
+      const current = videosGrid.firstElementChild;
+      const placeholder = videosGrid.childElementCount === 1 && current.classList.contains('loading')
+        ? current
+        : Object.assign(document.createElement('div'), { className: 'loading', textContent: 'Loading videos...' });
+      resetGrid(placeholder);
+      allVideos = [];
+      offsetShift = 0;
     }
 
+    let succeeded = false;
     try {
-      let response;
-      
-      if (useAdvancedSearch && searchQuery) {
-        // Use advanced search endpoint
-        response = await fetch(appUrl('/api/videos/advanced-search'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            query: searchQuery,
-            page: page,
-            limit: limit
-          }),
-          signal
-        });
-      } else {
-        // Use regular search endpoint
-        let url = appUrl(`/api/videos?page=${page}&limit=${limit}&sort=${sortBy}`); // Include sort
-        if (searchQuery) {
-          url += `&search=${encodeURIComponent(searchQuery)}`;
-        }
-        response = await fetch(url, { signal });
-      }
-      
-      if (!response.ok) {
-        // Check if this is an advanced search failure that should fallback
-        if (useAdvancedSearch && searchQuery && (response.status === 503 || response.status >= 500)) {
-          try {
-            const errorData = await response.json();
-            if (errorData.fallback) {
-              console.warn('Advanced search failed, falling back to regular search');
-              // Retry with regular search
-              useAdvancedSearch = false;
-              if (advancedSearchToggle) advancedSearchToggle.checked = false;
-              return loadVideos(page, append);
-            }
-          } catch (parseError) {
-            // Continue with regular error handling
-          }
-        }
-        
-        if (response.status === 404 && searchQuery) { // Handle no search results gracefully
-             if (!append) videosGrid.innerHTML = '<div class="loading">No videos found matching your search.</div>';
-             totalPages = 0;
-             totalVideos = 0;
-             return; // Exit early
-        }
-        throw new Error(`Failed to fetch videos (status: ${response.status})`);
-      }
-      
-      const data = await response.json();
-      
-      // Update state from response
-      limit = data.limit;
-      totalVideos = data.totalCount;
-      totalPages = Math.ceil(totalVideos / limit);
-      currentPage = data.page;
-      
-      const newVideos = data.videos;
-      allVideos = append ? [...allVideos, ...newVideos] : newVideos; // Append or replace local cache
+      const data = await fetchVideoPage(page, controller.signal);
+      if (!isCurrent()) return;
 
-      if (allVideos.length === 0 && !append) {
-         videosGrid.innerHTML = '<div class="loading">No videos found. Add videos to your library folder.</div>';
-      } else {
-         await renderVideos(newVideos, append); // Render only the newly fetched videos if appending
-      }
+      const pageVideos = data.videos || [];
+      limit = data.limit || PAGE_SIZE;
+      currentPage = data.page || page;
+      offsetShift -= shiftAtRequest;
+      // Only an appended page can overlap what is already loaded.
+      const loadedIds = new Set(append ? allVideos.map((video) => String(video.id)) : []);
+      const newVideos = pageVideos.filter((video) => !loadedIds.has(String(video.id)));
+      allVideos = append ? allVideos.concat(newVideos) : newVideos;
+      // An empty page means the server has nothing more, whatever the count said.
+      totalVideos = pageVideos.length ? (data.totalCount || 0) : allVideos.length;
+      freshLoadPending = false;
 
+      await renderVideos(newVideos, append);
+      succeeded = isCurrent();
     } catch (error) {
-       if (error.name === 'AbortError') {
-         console.log('Fetch aborted');
-       } else {
-         console.error('Error loading videos:', error);
-         if (!append) videosGrid.innerHTML = '<div class="loading">Error loading videos. Please try again.</div>';
-       }
+      if (!isCurrent() || error.name === 'AbortError') return;
+      console.error('Error loading videos:', error);
+      if (append) {
+        showToast('Could not load more videos.', 'error');
+      } else {
+        setGridMessage('Error loading videos. Please try again.', { error: true });
+      }
     } finally {
-      isLoading = false;
-      pendingPage = null;
-      loadingIndicator.style.display = 'none';
-      currentAbortController = null; // Clear the controller
-      updateInfiniteScrollObserverState();
+      if (isCurrent()) {
+        isLoading = false;
+        freshLoadPending = false;
+        listAbortController = null;
+        loadingIndicator.hidden = true;
+        updateSentinelState();
+        if (succeeded) {
+          pendingSseAdds.splice(0).forEach(handleSseAddVideo);
+          rearmInfiniteScroll();
+        }
+      }
     }
   }
 
-  /**
-   * Handle search input with debouncing
-   */
-  function handleSearchInput(event) {
-    searchQuery = event.target.value.trim();
-    
-    // Skip auto-triggering for advanced search - require button press
-    if (useAdvancedSearch) {
-      return; // Don't auto-search in advanced mode
-    }
-    
-    const searchIcon = document.querySelector('.search-icon');
-    if (searchIcon) searchIcon.classList.add('searching');
-    
-    if (searchTimeout) clearTimeout(searchTimeout);
-    
-    searchTimeout = setTimeout(() => {
-      currentPage = 1; // Reset to first page for new search
-      loadVideos(currentPage, false).finally(() => { // Fetch page 1, don't append
-         if (searchIcon) searchIcon.classList.remove('searching');
-      });
-    }, 300); // 300ms debounce
-  }
-
-  /**
-   * Handle search button click (for advanced search)
-   */
-  function handleSearchButtonClick() {
+  function runSearch() {
+    clearTimeout(searchTimeout);
+    searchTimeout = null;
     searchQuery = searchInput.value.trim();
-    
-    if (!searchQuery && !useAdvancedSearch) {
-      // For regular search, allow empty query to show all videos
-      searchQuery = '';
-    }
-    
-    const searchIcon = document.querySelector('.search-icon');
-    if (searchButton) searchButton.classList.add('searching');
-    if (searchIcon) searchIcon.classList.add('searching');
-    
-    currentPage = 1; // Reset to first page for new search
-    loadVideos(currentPage, false).finally(() => { // Fetch page 1, don't append
-      if (searchButton) searchButton.classList.remove('searching');
-      if (searchIcon) searchIcon.classList.remove('searching');
+    setAdvancedQuery(useAdvancedSearch && Boolean(searchQuery));
+    searchIcon.classList.add('searching');
+    searchButton.classList.add('searching');
+    loadVideos(false).finally(() => {
+      searchIcon.classList.remove('searching');
+      searchButton.classList.remove('searching');
     });
   }
 
-  /**
-   * Update the scan status UI element
-   */
-  function updateScanStatusUI(statusData) {
-    // Only update UI if a scan has been initiated in this session
-    if (!hasScanRunThisSession) return; 
-    
-    if (!scanStatusElement) return;
-
-    scanStatusElement.style.display = 'block'; // Make sure element is visible
-
-    let statusText = '';
-    let statusClass = '';
-
-    switch (statusData.status) {
-      case 'running':
-        statusText = `Scanning... (${statusData.message || ''})`;
-        statusClass = 'running';
-        refreshBtn.disabled = true; // Disable refresh while running
-        break;
-      case 'completed':
-        statusText = `Scan ${statusData.status}: ${statusData.message || 'Finished.'}`;
-        statusClass = 'completed';
-        resetRefreshButtonState(); // Re-enable button
-        break;
-      case 'failed':
-        statusText = `Scan ${statusData.status}: ${statusData.message || 'An error occurred.'}`;
-        statusClass = 'failed';
-        resetRefreshButtonState(); // Re-enable button
-        break;
-      case 'idle':
-      default:
-        statusText = ''; // Hide if idle
-        statusClass = 'idle';
-        resetRefreshButtonState(); // Ensure button is enabled
-        break;
-    }
-
-    scanStatusElement.textContent = statusText;
-    scanStatusElement.className = `scan-status ${statusClass}`; // Update class for styling
-
-    if (statusData.status === 'completed') {
-      showToast('Scan complete. Reloading video list...');
-      setTimeout(() => {
-        currentPage = 1;
-        loadVideos(currentPage, false);
-      }, 1500);
-    }
+  function handleSearchInput() {
+    // Advanced (LLM) search only runs for a submitted query (Enter or the search button)
+    if (useAdvancedSearch) return;
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(runSearch, 300);
   }
 
-  /**
-   * Poll the backend for scan status
-   */
-  async function pollScanStatus() {
-    if (scanPollingInterval) {
-      return;
-    }
-
-    const generation = ++scanPollGeneration;
-    console.log('Starting scan status polling...');
-
-    const stopPolling = () => {
-      if (generation !== scanPollGeneration) {
-        return;
-      }
-      if (scanPollingInterval) {
-        clearInterval(scanPollingInterval);
-        scanPollingInterval = null;
-      }
-    };
-
-    const fetchAndUpdateStatus = async () => {
-      try {
-        const response = await fetch(appUrl('/api/scan/status'));
-        if (!response.ok) {
-          throw new Error(`Failed to fetch scan status: ${response.status}`);
-        }
-        const statusData = await response.json();
-        if (generation !== scanPollGeneration) {
-          return null;
-        }
-        updateScanStatusUI(statusData);
-        return statusData.status;
-      } catch (error) {
-        if (generation !== scanPollGeneration) {
-          return null;
-        }
-        console.error('Error polling scan status:', error);
-        if (scanStatusElement) {
-          scanStatusElement.textContent = 'Error fetching scan status.';
-          scanStatusElement.className = 'scan-status failed';
-        }
-        resetRefreshButtonState();
-        return null;
-      }
-    };
-
-    const currentStatus = await fetchAndUpdateStatus();
-    if (generation !== scanPollGeneration) {
-      return;
-    }
-    if (currentStatus !== 'running') {
-      stopPolling();
-      return;
-    }
-
-    let requestInFlight = false;
-    scanPollingInterval = setInterval(async () => {
-      if (requestInFlight || generation !== scanPollGeneration) {
-        return;
-      }
-      requestInFlight = true;
-      const nextStatus = await fetchAndUpdateStatus();
-      requestInFlight = false;
-      if (nextStatus !== 'running') {
-        stopPolling();
-      }
-    }, 5000);
-  }
-
-  /**
-   * Handle favorites toggle change
-   * NOTE: This currently filters only the *loaded* videos.
-   * For full filtering, backend changes would be needed.
-   */
-  function handleFavoritesToggle(event) {
-    showOnlyFavorites = event.target.checked;
-    // Re-render based on the currently loaded 'allVideos' array
-    videosGrid.innerHTML = ''; // Clear grid before re-rendering filtered list
-    renderVideos(allVideos, false); // Render the filtered subset of loaded videos
-  }
-
-  /**
-   * Handle advanced search toggle
-   */
-  function handleAdvancedSearchToggle(event) {
-    useAdvancedSearch = event.target.checked;
-    const searchContainer = searchInput.parentElement;
-    
-    // Update search input placeholder to indicate advanced mode
-    if (useAdvancedSearch) {
-      searchInput.placeholder = "Describe what you're looking for (e.g., 'find Cinderbrew Meadery with Evandis deaths')...";
-      searchContainer.classList.add('advanced-mode');
-      // Show search button for advanced mode
-      if (searchButton) searchButton.style.display = 'flex';
-    } else {
-      searchInput.placeholder = "Search videos...";
-      searchContainer.classList.remove('advanced-mode');
-      // Hide search button for regular mode
-      if (searchButton) searchButton.style.display = 'none';
-    }
-    
-    // If there's a current search query, re-run the search with the new mode
-    if (searchQuery) {
-      currentPage = 1; // Reset to first page
-      loadVideos(currentPage, false); // Re-search with the new mode
-    }
-  }
-
-  /**
-   * Handle Enter key press in search input
-   */
-  function handleSearchKeyPress(event) {
+  function handleSearchKeyDown(event) {
     if (event.key === 'Enter') {
       event.preventDefault();
-      handleSearchButtonClick();
+      runSearch();
     }
   }
 
-  /**
-   * Creates a video card DOM element.
-   * @param {object} video - The video object.
-   * @param {object} options - Rendering options.
-   * @returns {HTMLElement} The video card element.
-   */
-  function createVideoCardElement(video, options = {}) {
-      const {
-        animate = true,
-        highPriorityThumbnail = false
-      } = options;
-      const videoCard = document.createElement('div');
-      videoCard.className = 'video-card';
-      videoCard.dataset.id = video.id;
-
-      const isFavorited = VideoUtils.isFavorite(video.id.toString()); // Use VideoUtils explicitly
-      // Ensure duration is formatted, using utility if needed
-      const durationFormatted = video.duration_formatted || (window.VideoUtils && typeof window.VideoUtils.formatDuration === 'function' ? window.VideoUtils.formatDuration(video.duration) : `${Math.floor(video.duration / 60)}:${(video.duration % 60).toString().padStart(2, '0')}`);
-      const thumbnailSrc = video.thumbnail_path ? appUrl(video.thumbnail_path) : getPlaceholderThumbnail();
-      const imageLoading = highPriorityThumbnail ? 'eager' : 'lazy';
-      const imageFetchPriority = highPriorityThumbnail ? 'high' : 'auto';
-
-      // --- Outcome Indicator Logic ---
-      let outcomeStatus = 'neutral';
-      const titleLower = video.title.toLowerCase();
-      const successKeywords = ['kill'];
-      const failureKeywords = ['wipe', 'abandoned', 'deplete'];
-      // Updated regex to match +<number> optionally enclosed in parentheses, e.g., (+1) or +1
-      const successPatternRegex = /\(\+\d+\)|\+\d+/;
-
-      // Prioritize failure keywords
-      if (failureKeywords.some(kw => titleLower.includes(kw))) {
-          outcomeStatus = 'failure';
-      } 
-      // Only check for success if no failure keyword was found
-      else if (successPatternRegex.test(video.title) || successKeywords.some(kw => titleLower.includes(kw))) {
-          outcomeStatus = 'success';
-      }
-      // Otherwise, it remains 'neutral'
-
-      // --- Build card with DOM nodes only (no dynamic HTML interpolation) ---
-      const link = document.createElement('a');
-      link.className = 'video-card-link';
-      link.rel = 'noopener noreferrer';
-      link.href = appUrl(`/watch/${video.id}`);
-
-      const thumbnailContainer = document.createElement('div');
-      thumbnailContainer.className = 'thumbnail-container';
-
-      const thumbnailImage = document.createElement('img');
-      thumbnailImage.className = 'thumbnail';
-      thumbnailImage.src = thumbnailSrc;
-      thumbnailImage.alt = video.title;
-      thumbnailImage.setAttribute('loading', imageLoading);
-      thumbnailImage.setAttribute('decoding', 'async');
-      thumbnailImage.setAttribute('fetchpriority', imageFetchPriority);
-
-      const durationBadge = document.createElement('div');
-      durationBadge.className = 'duration-badge';
-      durationBadge.textContent = durationFormatted;
-
-      thumbnailContainer.appendChild(thumbnailImage);
-      thumbnailContainer.appendChild(durationBadge);
-
-      // Static outcome indicator node (class derives from the fixed status logic above)
-      if (outcomeStatus === 'success' || outcomeStatus === 'failure') {
-          const outcomeIndicator = document.createElement('span');
-          outcomeIndicator.className = `outcome-indicator ${outcomeStatus}`;
-          thumbnailContainer.appendChild(outcomeIndicator);
-      }
-
-      const videoInfo = document.createElement('div');
-      videoInfo.className = 'video-info';
-
-      const videoTitle = document.createElement('div');
-      videoTitle.className = 'video-title';
-      videoTitle.textContent = video.title;
-
-      videoInfo.appendChild(videoTitle);
-      link.appendChild(thumbnailContainer);
-      link.appendChild(videoInfo);
-
-      const favoriteIndicator = document.createElement('span');
-      favoriteIndicator.className = `favorite-indicator-grid${isFavorited ? ' favorited' : ''}`;
-      favoriteIndicator.dataset.videoId = video.id;
-
-      videoCard.appendChild(link);
-      videoCard.appendChild(favoriteIndicator);
-      // --- End card build ---
-      
-      if (animate) {
-        videoCard.classList.add('card-enter');
-        videoCard.addEventListener('animationend', () => {
-          videoCard.classList.remove('card-enter');
-        }, { once: true });
-      }
-
-      // Seed list-provided metadata without triggering a per-card API request.
-      if (videoPreviewManager) {
-        videoPreviewManager.primePreviewInfo(video.id.toString(), video.preview);
-        videoPreviewManager.attachPreviewListeners(videoCard, video.id.toString());
-      }
-
-      return videoCard;
+  function handleAdvancedSearchToggle(event) {
+    const showingAdvancedResults = advancedQuery;
+    setAdvancedMode(event.target.checked);
+    // Switching on waits for a submitted query; switching off replaces advanced results.
+    if (showingAdvancedResults) {
+      runSearch();
+    }
   }
-  
+
+  function handleSortChange(event) {
+    sortBy = event.target.value;
+    loadVideos(false);
+  }
+
+  function handleFavoritesToggle(event) {
+    showOnlyFavorites = event.target.checked;
+    // A fresh load in flight applies the filter when it renders.
+    if (freshLoadPending) return;
+    // Filters the loaded videos; infinite scroll keeps loading pages while the sentinel is visible.
+    renderVideos(allVideos, false).then(rearmInfiniteScroll);
+  }
+
   /**
-   * Render videos in the grid
-   * @param {Array} videosToRender - Array of video objects to render
-   * @param {boolean} append - Whether to append to the grid or replace its content
+   * Create a video card DOM element (text only via textContent/attributes)
+   */
+  function createVideoCardElement(video, { animate = false, highPriorityThumbnail = false } = {}) {
+    const videoId = String(video.id);
+    const videoCard = document.createElement('div');
+    videoCard.className = animate ? 'video-card card-enter' : 'video-card';
+    videoCard.dataset.id = videoId;
+
+    // Outcome: failure keywords win over success markers such as (+2) or "kill"
+    const titleLower = video.title.toLowerCase();
+    let outcomeStatus = null;
+    if (['wipe', 'abandoned', 'deplete'].some((keyword) => titleLower.includes(keyword))) {
+      outcomeStatus = 'failure';
+    } else if (/\(\+\d+\)|\+\d+/.test(video.title) || titleLower.includes('kill')) {
+      outcomeStatus = 'success';
+    }
+
+    const link = document.createElement('a');
+    link.className = 'video-card-link';
+    link.href = appUrl(`/watch/${videoId}`);
+
+    const thumbnailContainer = document.createElement('div');
+    thumbnailContainer.className = 'thumbnail-container';
+
+    const thumbnailImage = document.createElement('img');
+    thumbnailImage.className = 'thumbnail';
+    thumbnailImage.src = video.thumbnail_path ? appUrl(video.thumbnail_path) : getPlaceholderThumbnail();
+    thumbnailImage.alt = ''; // The title is rendered right below
+    thumbnailImage.width = 640;
+    thumbnailImage.height = 360;
+    thumbnailImage.setAttribute('loading', highPriorityThumbnail ? 'eager' : 'lazy');
+    thumbnailImage.setAttribute('decoding', 'async');
+    thumbnailImage.setAttribute('fetchpriority', highPriorityThumbnail ? 'high' : 'auto');
+
+    const durationBadge = document.createElement('div');
+    durationBadge.className = 'duration-badge';
+    durationBadge.textContent = formatVideoDuration(video);
+
+    thumbnailContainer.append(thumbnailImage, durationBadge);
+
+    if (outcomeStatus) {
+      const outcomeIndicator = document.createElement('span');
+      outcomeIndicator.className = `outcome-indicator ${outcomeStatus}`;
+      thumbnailContainer.appendChild(outcomeIndicator);
+    }
+
+    const videoInfo = document.createElement('div');
+    videoInfo.className = 'video-info';
+
+    const videoTitle = document.createElement('div');
+    videoTitle.className = 'video-title';
+    videoTitle.textContent = video.title;
+
+    videoInfo.appendChild(videoTitle);
+    link.append(thumbnailContainer, videoInfo);
+
+    const favoriteButton = document.createElement('button');
+    favoriteButton.type = 'button';
+    favoriteButton.className = 'favorite-indicator-grid';
+    favoriteButton.dataset.videoId = videoId;
+    favoriteButton.setAttribute('aria-label', `Favorite: ${video.title}`);
+    renderGridFavorite(favoriteButton, isFavorite(videoId));
+
+    videoCard.append(link, favoriteButton);
+
+    // Seed list-provided preview metadata without a per-card API request.
+    videoPreviewManager.primePreviewInfo(videoId, video.preview);
+
+    return videoCard;
+  }
+
+  /**
+   * Render videos into the grid in rAF-sized chunks
+   * @param {Array} videosToRender
+   * @param {boolean} append - Append to the grid instead of replacing it
    */
   async function renderVideos(videosToRender, append = false) {
-    let displayedVideos = videosToRender;
-    
-    // Apply favorite filtering *only* to the videos being rendered in this batch
-    if (showOnlyFavorites) {
-      const favoriteIds = VideoUtils.getFavorites(); // Use VideoUtils explicitly
-      displayedVideos = videosToRender.filter(video => favoriteIds.includes(video.id.toString()));
-    }
+    const displayedVideos = showOnlyFavorites
+      ? videosToRender.filter((video) => isFavorite(video.id))
+      : videosToRender;
 
-    // If appending, check if the filtered list for this batch is empty
-    if (append && displayedVideos.length === 0) {
-        // Don't show "no videos" message if just appending an empty filtered batch
-        updateInfiniteScrollObserverState();
-        return;
-    }
-    
-    // If not appending (page 1 / new search / sort) and filtered list is empty
-    if (!append && displayedVideos.length === 0) {
-      if (showOnlyFavorites) {
-        videosGrid.innerHTML = '<div class="loading">No favorite videos found. Add videos to your favorites while watching them.</div>';
-      } else if (searchQuery) {
-         videosGrid.innerHTML = '<div class="loading">No videos found matching your search.</div>';
-      } else {
-        videosGrid.innerHTML = '<div class="loading">No videos found. Add videos to your library folder.</div>';
-      }
-      return;
-    }
-    
-    // If not appending, clear the grid first
     if (!append) {
-        videosGrid.innerHTML = '';
+      if (displayedVideos.length === 0) {
+        setGridMessage(emptyGridMessage());
+        return;
+      }
+      resetGrid();
+    } else if (displayedVideos.length === 0) {
+      return;
+    } else {
+      const emptyState = videosGrid.querySelector('.empty-state');
+      if (emptyState) emptyState.remove();
     }
 
+    const animate = !append && !hasRenderedCards;
+    hasRenderedCards = true;
+    const generation = renderGeneration;
     const chunkSize = 8;
     const baseIndex = append ? videosGrid.querySelectorAll('.video-card').length : 0;
 
     for (let start = 0; start < displayedVideos.length; start += chunkSize) {
       const fragment = document.createDocumentFragment();
-      const chunk = displayedVideos.slice(start, start + chunkSize);
-
-      chunk.forEach((video, index) => {
-        const overallIndex = baseIndex + start + index;
-        const isFirstViewportBatch = !append && overallIndex < 6;
-        const videoCard = createVideoCardElement(video, {
-          animate: !append,
-          highPriorityThumbnail: isFirstViewportBatch
-        });
-        fragment.appendChild(videoCard);
+      displayedVideos.slice(start, start + chunkSize).forEach((video, index) => {
+        fragment.appendChild(createVideoCardElement(video, {
+          animate,
+          highPriorityThumbnail: !append && baseIndex + start + index < 6
+        }));
       });
-
       videosGrid.appendChild(fragment);
 
       if (start + chunkSize < displayedVideos.length) {
         await nextFrame();
+        if (generation !== renderGeneration) return; // A newer render replaced the grid
       }
     }
-
-    updateInfiniteScrollObserverState();
   }
-  
+
+  // --- Infinite scroll ---
   function loadNextPageIfNeeded() {
-    if (isLoading || currentPage >= totalPages) {
-      return;
+    if (!isLoading && hasMorePages()) {
+      loadVideos(true);
     }
-
-    const nextPage = currentPage + 1;
-    if (pendingPage === nextPage) {
-      return;
-    }
-
-    loadVideos(nextPage, true);
   }
 
-  function updateInfiniteScrollObserverState() {
-    if (!videosLoadSentinel) {
-      return;
-    }
-
-    const isAtEnd = currentPage >= totalPages;
-    videosLoadSentinel.classList.toggle('is-idle', isAtEnd);
-    videosLoadSentinel.setAttribute('aria-hidden', isAtEnd ? 'true' : 'false');
+  function updateSentinelState() {
+    videosLoadSentinel.classList.toggle('is-idle', !hasMorePages());
   }
 
-  const handleInfiniteScroll = debounce(() => {
-    if (isLoading || currentPage >= totalPages) {
+  /**
+   * IntersectionObserver only reports changes. On tall viewports the sentinel never
+   * leaves the (expanded) viewport, so re-observe after each load to get a fresh report.
+   */
+  function rearmInfiniteScroll() {
+    if (!infiniteScrollObserver || !hasMorePages()) {
       return;
     }
-
-    const scrollThreshold = 1200;
-    const scrollPosition = window.innerHeight + window.scrollY;
-    const documentHeight = document.documentElement.scrollHeight;
-
-    if (scrollPosition >= documentHeight - scrollThreshold) {
-      loadNextPageIfNeeded();
-    }
-  }, 100);
+    infiniteScrollObserver.unobserve(videosLoadSentinel);
+    infiniteScrollObserver.observe(videosLoadSentinel);
+  }
 
   function initializeInfiniteScroll() {
-    if (!videosLoadSentinel) {
+    if (typeof window.IntersectionObserver !== 'function') {
+      return;
+    }
+    infiniteScrollObserver = new window.IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        loadNextPageIfNeeded();
+      }
+    }, { root: null, rootMargin: '1200px 0px', threshold: 0 });
+    infiniteScrollObserver.observe(videosLoadSentinel);
+    updateSentinelState();
+  }
+
+  // --- Library scan ---
+  function resetRefreshButtonState() {
+    refreshBtn.disabled = false;
+    refreshIcon.classList.remove('spin');
+    refreshLabel.textContent = 'Refresh Videos';
+  }
+
+  function setScanStatus(text, statusClass = 'idle') {
+    clearTimeout(scanStatusClearTimer);
+    scanStatusElement.textContent = text;
+    scanStatusElement.className = `scan-status ${statusClass}`;
+    scanStatusElement.hidden = !text;
+  }
+
+  /**
+   * Show a running scan (from any tab). How it ends is only reported when this page
+   * saw it running, so a stale "completed" from an earlier scan never shows.
+   * @param {Object|null} statusData - null when the status request failed
+   */
+  function updateScanStatusUI(statusData) {
+    if (statusData && statusData.status === 'running') {
+      scanWatched = true;
+      setScanStatus(`Scanning... (${statusData.message || ''})`, 'running');
+      refreshBtn.disabled = true;
       return;
     }
 
-    if ('IntersectionObserver' in window) {
-      infiniteScrollObserver = new IntersectionObserver((entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            loadNextPageIfNeeded();
-          }
-        });
-      }, { root: null, rootMargin: '1200px 0px', threshold: 0 });
-
-      infiniteScrollObserver.observe(videosLoadSentinel);
-    } else {
-      window.addEventListener('scroll', handleInfiniteScroll, { passive: true });
+    resetRefreshButtonState();
+    if (!scanWatched) {
+      setScanStatus('');
+      return;
     }
+    scanWatched = false;
+    const reloadList = scanStartedHere;
+    scanStartedHere = false;
 
-    updateInfiniteScrollObserverState();
-  }
-  
-  /**
-   * Handle sort change
-   */
-  function handleSortChange(event) {
-    sortBy = event.target.value;
-    currentPage = 1; // Reset to first page
-    loadVideos(currentPage, false); // Fetch page 1 with new sort, don't append
+    if (!statusData) {
+      setScanStatus('Error fetching scan status.', 'failed');
+    } else if (statusData.status === 'completed') {
+      setScanStatus(`Scan completed: ${statusData.message || 'Finished.'}`, 'completed');
+      if (reloadList) {
+        showToast('Scan complete. Reloading video list...');
+        setTimeout(() => loadVideos(false), 1500);
+      }
+    } else if (statusData.status === 'failed') {
+      setScanStatus(`Scan failed: ${statusData.message || 'An error occurred.'}`, 'failed');
+    } else {
+      setScanStatus('');
+      return;
+    }
+    scanStatusClearTimer = setTimeout(() => setScanStatus(''), 10000);
   }
 
   /**
-   * Resets the refresh button to its default state
+   * Check the scan status; keeps polling every 5 s only while a scan is running.
    */
-  function resetRefreshButtonState() {
-    refreshBtn.disabled = false;
-    refreshBtn.innerHTML = `
-      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-        <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
-        <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
-      </svg>
-      Refresh Videos
-    `;
+  async function checkScanStatus() {
+    const seq = ++scanCheckSeq;
+    let statusData = null;
+    try {
+      const response = await fetch(appUrl('/api/scan/status'));
+      if (!response.ok) {
+        throw new Error(`Failed to fetch scan status: ${response.status}`);
+      }
+      statusData = await response.json();
+    } catch (error) {
+      console.error('Error polling scan status:', error);
+    }
+    if (seq !== scanCheckSeq) return; // A newer check superseded this one
+
+    updateScanStatusUI(statusData);
+    const running = Boolean(statusData) && statusData.status === 'running';
+    if (running && !scanPollTimer) {
+      scanPollTimer = setInterval(checkScanStatus, 5000);
+    } else if (!running && scanPollTimer) {
+      clearInterval(scanPollTimer);
+      scanPollTimer = null;
+    }
   }
-  
+
   /**
-   * Refresh the video library by initiating a scan
+   * Start a library scan
    */
   async function refreshLibrary() {
-    // Check if scan is already running via UI state or a quick API check?
-    // For simplicity, we rely on the backend to prevent concurrent scans for now.
-    // We disable the button immediately based on the UI state from polling.
     if (refreshBtn.disabled) {
-        console.log('Refresh button is disabled (scan likely running).');
-         return;
-     }
- 
-     hasScanRunThisSession = true; // Set the flag when scan is initiated
-     try {
-       // Disable button immediately and show initiating state
-       refreshBtn.disabled = true;
-      refreshBtn.innerHTML = `
-        <svg class="spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-          <path d="M11.534 7h3.932a.25.25 0 0 1 .192.41l-1.966 2.36a.25.25 0 0 1-.384 0l-1.966-2.36a.25.25 0 0 1 .192-.41zm-11 2h3.932a.25.25 0 0 0 .192-.41L2.692 6.23a.25.25 0 0 0-.384 0L.342 8.59A.25.25 0 0 0 .534 9z"/>
-          <path fill-rule="evenodd" d="M8 3c-1.552 0-2.94.707-3.857 1.818a.5.5 0 1 1-.771-.636A6.002 6.002 0 0 1 13.917 7H12.9A5.002 5.002 0 0 0 8 3zM3.1 9a5.002 5.002 0 0 0 8.757 2.182.5.5 0 1 1 .771.636A6.002 6.002 0 0 1 2.083 9H3.1z"/>
-        </svg>
-        Initiating Scan...
-      `;
-      // Update status element immediately for responsiveness
-      if (scanStatusElement) {
-          scanStatusElement.textContent = 'Initiating Scan...';
-          scanStatusElement.className = 'scan-status running';
-      }
+      return;
+    }
 
-      // Use POST for the refresh endpoint
-      const response = await fetch(appUrl('/api/refresh'), { method: 'POST' }); 
-      
+    scanWatched = true;
+    scanStartedHere = true;
+    refreshBtn.disabled = true;
+    refreshIcon.classList.add('spin');
+    refreshLabel.textContent = 'Initiating Scan...';
+    setScanStatus('Initiating Scan...', 'running');
+    try {
+      const response = await fetch(appUrl('/api/refresh'), { method: 'POST' });
       if (!response.ok) {
-         // Handle non-2xx responses, e.g., 500 if initiation failed
-         const errorData = await response.json().catch(() => ({ error: 'Failed to initiate scan' }));
-         throw new Error(errorData.error || `Failed to initiate scan (status: ${response.status})`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to initiate scan (status: ${response.status})`);
       }
-      
-      // Response status 202 Accepted indicates scan was initiated
-      if (response.status === 202) {
-          showToast('Library scan initiated.');
-          // Start polling for status updates
-          pollScanStatus(); 
-      } else {
-          // Handle unexpected success codes if necessary
-          console.warn('Unexpected response status after initiating scan:', response.status);
-          // Still attempt to poll
-          pollScanStatus();
-      }
-
+      showToast('Library scan initiated.');
+      checkScanStatus();
     } catch (error) {
       console.error('Error initiating library scan:', error);
-      resetRefreshButtonState(); // Re-enable button on initiation error
+      scanWatched = false;
+      scanStartedHere = false;
+      resetRefreshButtonState();
       showToast(`Error: ${error.message || 'Failed to initiate scan.'}`, 'error');
-      if (scanStatusElement) {
-          scanStatusElement.textContent = 'Failed to initiate scan.';
-          scanStatusElement.className = 'scan-status failed';
-      }
+      setScanStatus('Failed to initiate scan.', 'failed');
     }
-    // Note: Button state is now managed by polling logic (updateScanStatusUI)
   }
 
-  /**
-   * Connect to the Server-Sent Events endpoint
-   */
+  // --- Live updates (SSE) ---
   function connectSSE() {
-    if (sseEventSource) {
-      sseEventSource.close(); // Close existing connection if any
-    }
+    const source = new EventSource(appUrl('/api/updates'));
+    sseEventSource = source;
 
-    console.log('Connecting to SSE endpoint...');
-    sseEventSource = new EventSource(appUrl('/api/updates'));
-
-    sseEventSource.onopen = () => {
-      console.log('SSE connection established.');
+    source.onopen = () => {
+      sseFailures = 0;
     };
-
-    sseEventSource.onerror = (error) => {
-      console.error('SSE connection error:', error);
-      // Optionally implement reconnection logic here
-      sseEventSource.close(); // Close on error
-      // Attempt to reconnect after a delay
-      setTimeout(connectSSE, 5000); // Reconnect after 5 seconds
+    // While CONNECTING the browser retries by itself; CLOSED means it gave up (e.g. an HTTP 401).
+    source.onerror = () => {
+      sseFailures += 1;
+      if (source.readyState === 2 || sseFailures >= SSE_MAX_FAILURES) {
+        source.close();
+        if (sseEventSource === source) sseEventSource = null;
+        handleSseLost();
+      }
     };
-
-    sseEventSource.addEventListener('connected', (event) => {
-        const data = JSON.parse(event.data);
-        console.log('SSE connected event received:', data);
-    });
-
-    // Listen for custom 'update' events (or just use the default 'message' event)
-    sseEventSource.onmessage = (event) => {
+    source.onmessage = (event) => {
       try {
         const updateData = JSON.parse(event.data);
-        console.log('SSE message received:', updateData);
-
         if (updateData.type === 'add') {
           handleSseAddVideo(updateData.video);
         } else if (updateData.type === 'delete') {
@@ -1014,871 +753,421 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   /**
-   * Handle adding a video via SSE
+   * The update stream closed. An expired session sends the user to the login page;
+   * otherwise reconnect a few times, then stop and say so.
+   */
+  async function handleSseLost() {
+    const status = await fetch(appUrl('/api/scan/status')).then((response) => response.status, () => 0);
+    if (status === 401) {
+      window.location.assign(appUrl('/login.html'));
+      return;
+    }
+    if (sseFailures >= SSE_MAX_FAILURES) {
+      showToast('Live updates stopped. Reload the page to reconnect.', 'error');
+      return;
+    }
+    setTimeout(connectSSE, 5000);
+  }
+
+  /**
+   * A video was added. Only the default view (no search, newest first) can show it
+   * in the right place; otherwise just announce it.
    */
   function handleSseAddVideo(newVideo) {
-    // Check if video already exists in the DOM (e.g., due to race condition)
-    if (videosGrid.querySelector(`.video-card[data-id="${newVideo.id}"]`)) {
-      console.log(`SSE Add: Video ${newVideo.id} already exists in DOM, skipping.`);
+    if (!newVideo || newVideo.id === undefined || newVideo.id === null || typeof newVideo.title !== 'string') {
+      return;
+    }
+    if (freshLoadPending) {
+      pendingSseAdds.push(newVideo); // The fresh list replaces allVideos; apply this after it lands
+      return;
+    }
+    const videoId = String(newVideo.id);
+    if (allVideos.some((video) => String(video.id) === videoId)) {
       return;
     }
 
-    // Add to the local cache if not already present
-    const existsInCache = allVideos.some(v => v.id === newVideo.id);
-    if (!existsInCache) {
-        allVideos.unshift(newVideo); // Add to the beginning of the local cache
-        totalVideos++; // Increment total count
+    if (searchQuery || sortBy !== DEFAULT_SORT) {
+      showToast(`New video added: ${newVideo.title}. Clear the search and sort by newest to see it.`);
+      return;
     }
 
-    // Create and prepend the new video card element
-    // Format duration if needed (assuming utils are loaded)
-    newVideo.duration_formatted = window.VideoUtils.formatDuration(newVideo.duration);
-    const videoCard = createVideoCardElement(newVideo, {
-      animate: true,
-      highPriorityThumbnail: false
-    });
-    videosGrid.prepend(videoCard); // Add to the beginning of the grid
+    allVideos.unshift(newVideo);
+    totalVideos += 1;
+    offsetShift += 1;
 
-    updateInfiniteScrollObserverState();
-
-    // Remove "No videos found" message if it exists
-    const noVideosMessage = videosGrid.querySelector('.loading');
-    if (noVideosMessage && noVideosMessage.textContent.includes('No videos found')) {
-        noVideosMessage.remove();
+    if (!showOnlyFavorites || isFavorite(videoId)) {
+      const emptyState = videosGrid.querySelector('.empty-state');
+      if (emptyState) emptyState.remove();
+      videosGrid.prepend(createVideoCardElement(newVideo, { animate: true }));
     }
-
+    updateSentinelState();
     showToast(`Video added: ${newVideo.title}`);
   }
 
-  /**
-   * Handle deleting a video via SSE
-   */
   function handleSseDeleteVideo(videoId) {
-    // Remove from the local cache
+    const id = String(videoId);
     const initialLength = allVideos.length;
-    allVideos = allVideos.filter(v => v.id !== videoId);
+    allVideos = allVideos.filter((video) => String(video.id) !== id);
     if (allVideos.length < initialLength) {
-        totalVideos--; // Decrement total count if removed from cache
+      totalVideos = Math.max(0, totalVideos - 1);
+      offsetShift -= 1;
     }
 
-    // Remove the card from the DOM
-    const videoCard = videosGrid.querySelector(`.video-card[data-id="${videoId}"]`);
-    if (videoCard) {
-      // Clean up preview functionality
-      if (videoPreviewManager) {
-        videoPreviewManager.removePreviewListeners(videoCard);
-        videoPreviewManager.hidePreview(videoCard, videoId);
-      }
-      
-      videoCard.classList.add('fade-out'); // Add fade-out animation
-      videoCard.addEventListener('animationend', () => {
-          videoCard.remove();
-          // Add "No videos" message if grid becomes empty
-          if (videosGrid.children.length === 0) {
-              videosGrid.innerHTML = '<div class="loading">No videos found. Add videos to your library folder.</div>';
-          }
-      }, { once: true });
-      showToast(`Video removed.`);
-    } else {
-        console.log(`SSE Delete: Video card ${videoId} not found in DOM.`);
+    const videoCard = findGridCard(id);
+    if (!videoCard) {
+      return;
     }
+    videoPreviewManager.hidePreview(videoCard, id, { immediate: true });
+
+    const removeCard = () => {
+      if (!videoCard.isConnected) return;
+      videoCard.remove();
+      if (!videosGrid.querySelector('.video-card')) {
+        setGridMessage(emptyGridMessage());
+      }
+    };
+    videoCard.classList.add('fade-out');
+    videoCard.addEventListener('animationend', removeCard, { once: true });
+    setTimeout(removeCard, 600); // animationend never fires if animations are disabled
+    showToast('Video removed.');
   }
 
+  // --- Video overlay ---
+  function isOverlayOpen() {
+    return overlay.getAttribute('aria-hidden') === 'false';
+  }
+
+  /** Where the dialog grows from: the clicked card, else a small rise. */
+  function overlayOriginTransform(event) {
+    const card = event && event.target && event.target.closest ? event.target.closest('.video-card') : null;
+    if (!card) {
+      return 'translateY(22px) scale(0.988)';
+    }
+    const rect = card.getBoundingClientRect();
+    const translateX = Math.round(rect.left + rect.width / 2 - window.innerWidth / 2);
+    const translateY = Math.round(rect.top + rect.height / 2 - window.innerHeight / 2);
+    const scale = clamp(rect.width / Math.min(window.innerWidth * 0.95, 1450), 0.3, 0.92);
+    return `translate(${translateX}px, ${translateY}px) scale(${scale.toFixed(3)})`;
+  }
 
   /**
-   * Video Overlay Functions
+   * Open/close motion. Cancels any motion in progress; resolves when done (immediately
+   * without Web Animations or with reduced motion) and rejects when superseded.
    */
-
-
-  function shouldUseReducedMotion() {
-    return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  }
-
-  function beginOverlayTransition() {
-    overlayTransitionNonce += 1;
-    return overlayTransitionNonce;
-  }
-
-  function isActiveOverlayTransition(nonce) {
-    return nonce === overlayTransitionNonce;
-  }
-
-  function clearOverlayOpenTransition() {
-    if (overlayOpenTransitionCleanup) {
-      overlayOpenTransitionCleanup();
-      overlayOpenTransitionCleanup = null;
+  function animateOverlay(opening, transform) {
+    overlayAnimations.forEach((animation) => animation.cancel());
+    overlayAnimations = [];
+    if (typeof overlayContainer.animate !== 'function' || (reducedMotionQuery && reducedMotionQuery.matches)) {
+      return Promise.resolve();
     }
-  }
-
-  function clearOverlayCloseTransition() {
-    if (overlayCloseTransitionCleanup) {
-      overlayCloseTransitionCleanup();
-      overlayCloseTransitionCleanup = null;
-    }
-  }
-
-  function watchOverlayContainerTransition(overlay, timeoutMs, onComplete) {
-    const overlayContainer = overlay.querySelector('.video-overlay-container');
-    if (!overlayContainer) {
-      onComplete();
-      return () => {};
-    }
-
-    let isFinished = false;
-    const finish = () => {
-      if (isFinished) return;
-      isFinished = true;
-      cleanup();
-      onComplete();
+    const hidden = { opacity: opening ? 0.82 : 0, transform };
+    const shown = { opacity: 1, transform: 'none' };
+    const timing = {
+      duration: opening ? 220 : 180,
+      easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+      fill: opening ? 'none' : 'forwards' // hold the closed frame until the overlay is hidden
     };
-
-    const handleTransitionEnd = (event) => {
-      if (event.target !== overlayContainer) return;
-      if (event.propertyName !== 'transform' && event.propertyName !== 'opacity') return;
-      finish();
-    };
-
-    overlayContainer.addEventListener('transitionend', handleTransitionEnd);
-    const timeoutId = setTimeout(finish, timeoutMs + 80);
-
-    const cleanup = () => {
-      overlayContainer.removeEventListener('transitionend', handleTransitionEnd);
-      clearTimeout(timeoutId);
-    };
-
-    return cleanup;
+    overlayAnimations = [
+      overlayContainer.animate(opening ? [hidden, shown] : [shown, hidden], timing),
+      overlayBackdrop.animate(opening ? [{ opacity: 0 }, { opacity: 1 }] : [{ opacity: 1 }, { opacity: 0 }], timing)
+    ];
+    return Promise.all(overlayAnimations.map((animation) => animation.finished));
   }
 
-  function resetOverlayTransformVariables(overlay) {
-    overlay.style.removeProperty('--overlay-origin-translate-x');
-    overlay.style.removeProperty('--overlay-origin-translate-y');
-    overlay.style.removeProperty('--overlay-origin-scale');
+  /** Keep keyboard and screen-reader focus inside the open overlay. */
+  function setBackgroundInert(inert) {
+    backgroundRegions.forEach((region) => {
+      region.inert = inert;
+    });
   }
 
-  function setOverlayOriginFromEvent(overlay, event) {
-    if (!event || !event.target || shouldUseReducedMotion()) {
-      overlay.classList.remove('has-origin');
-      resetOverlayTransformVariables(overlay);
-      return;
+  function getOverlayVideo() {
+    // Plyr.destroy() swaps in a clone of the element, so always look it up.
+    return document.getElementById('overlay-video-player');
+  }
+
+  function showOverlayLoading() {
+    if (overlayPlayerContainer.querySelector('.video-overlay-loading')) return;
+    const loadingOverlay = document.createElement('div');
+    loadingOverlay.className = 'video-overlay-loading';
+    const spinner = document.createElement('div');
+    spinner.className = 'loading-spinner';
+    loadingOverlay.appendChild(spinner);
+    overlayPlayerContainer.appendChild(loadingOverlay);
+  }
+
+  function setOverlayVideoReady(ready) {
+    if (overlayMediaListeners) {
+      overlayMediaListeners.abort();
+      overlayMediaListeners = null;
+    }
+    clearTimeout(overlayReadyTimer);
+    overlayPlayerContainer.querySelectorAll('.video-overlay-loading').forEach((node) => node.remove());
+    overlayPlayerContainer.classList.toggle('is-video-ready', ready);
+  }
+
+  /**
+   * Destroy the overlay player and stop any stream download
+   */
+  function teardownOverlayPlayer() {
+    setOverlayVideoReady(false);
+
+    if (overlayPlayer) {
+      try {
+        overlayPlayer.destroy();
+      } catch (error) {
+        console.warn('Error destroying Plyr player:', error);
+      }
+      overlayPlayer = null;
     }
 
-    const card = event.target.closest && event.target.closest('.video-card');
-    if (!card) {
-      overlay.classList.remove('has-origin');
-      resetOverlayTransformVariables(overlay);
-      return;
+    const overlayVideo = getOverlayVideo();
+    if (overlayVideo.hasAttribute('src')) {
+      overlayVideo.pause();
+      overlayVideo.removeAttribute('src');
+      overlayVideo.load();
     }
-
-    const cardRect = card.getBoundingClientRect();
-    const viewportCenterX = window.innerWidth / 2;
-    const viewportCenterY = window.innerHeight / 2;
-    const cardCenterX = cardRect.left + (cardRect.width / 2);
-    const cardCenterY = cardRect.top + (cardRect.height / 2);
-    const translateX = cardCenterX - viewportCenterX;
-    const translateY = cardCenterY - viewportCenterY;
-    const targetWidth = Math.min(window.innerWidth * 0.95, 1450);
-    const originScale = Math.max(0.3, Math.min(0.92, cardRect.width / targetWidth));
-
-    overlay.style.setProperty('--overlay-origin-translate-x', `${Math.round(translateX)}px`);
-    overlay.style.setProperty('--overlay-origin-translate-y', `${Math.round(translateY)}px`);
-    overlay.style.setProperty('--overlay-origin-scale', originScale.toFixed(3));
-    overlay.classList.add('has-origin');
   }
 
-  function showOverlayWithTransition(overlay, event) {
-    clearOverlayOpenTransition();
-    clearOverlayCloseTransition();
-    const transitionNonce = beginOverlayTransition();
+  /**
+   * Open the overlay player for a video. Uses the card data already loaded and only
+   * fetches /api/videos/:id on a miss (back/forward to a video not in the list).
+   */
+  async function openVideoOverlay(videoId, event, { updateHistory = true } = {}) {
+    const id = String(videoId);
+    const generation = ++overlayGeneration;
+    const isCurrent = () => generation === overlayGeneration;
+    const wasOpen = isOverlayOpen();
+    const originTransform = overlayOriginTransform(event);
 
-    overlay.classList.remove('is-closing');
-    setOverlayOriginFromEvent(overlay, event);
+    if (overlayFetchController) {
+      overlayFetchController.abort();
+      overlayFetchController = null;
+    }
+    teardownOverlayPlayer();
+
+    if (!wasOpen) {
+      const active = document.activeElement;
+      overlayReturnFocus = active && active !== document.body ? active : null;
+    }
+    overlayCurrentVideoId = id;
+    ['overlay-video-title', 'overlay-video-date', 'overlay-video-duration'].forEach((elementId) => {
+      document.getElementById(elementId).textContent = '';
+    });
+    PlayerCore.renderFavoriteButton(overlayFavoriteBtn, id);
+    overlayShareMenu.close();
+    showOverlayLoading();
+
     overlay.classList.add('visible');
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('overlay-open');
-
-    if (!shouldUseReducedMotion()) {
-      overlay.classList.add('is-opening');
-      overlayOpenTransitionCleanup = watchOverlayContainerTransition(overlay, OVERLAY_OPEN_TRANSITION_MS, () => {
-        overlayOpenTransitionCleanup = null;
-        if (!isActiveOverlayTransition(transitionNonce)) return;
-        overlay.classList.remove('is-opening');
-        overlay.classList.remove('has-origin');
-        resetOverlayTransformVariables(overlay);
-      });
-    } else {
-      overlay.classList.remove('has-origin');
-      overlay.classList.remove('is-opening');
-      resetOverlayTransformVariables(overlay);
-    }
-  }
-
-  function finalizeOverlayClose(overlay, updateHistory) {
-    beginOverlayTransition();
-    clearOverlayOpenTransition();
-    clearOverlayCloseTransition();
-
-    overlay.classList.remove('visible');
-    overlay.classList.remove('is-opening');
-    overlay.classList.remove('is-closing');
-    overlay.classList.remove('has-origin');
-    overlay.setAttribute('aria-hidden', 'true');
-    resetOverlayTransformVariables(overlay);
-    document.body.classList.remove('overlay-open');
-
-    if (updateHistory && window.location.pathname !== appUrl('/')) {
-      history.pushState({}, '', appUrl('/'));
+    setBackgroundInert(true);
+    // Focus the dialog itself: Plyr's keyboard shortcuts work at once and Space cannot hit a button.
+    overlayContainer.focus({ preventScroll: true });
+    if (!wasOpen) {
+      animateOverlay(true, originTransform).catch(() => {});
     }
 
-    // Reset page title
-    document.title = vodsName;
-  }
-
-  /**
-   * Open video overlay with specified video ID
-   * @param {string} videoId - The ID of the video to open
-   * @param {Event} event - Optional event to prevent default behavior
-   */
-  async function openVideoOverlay(videoId, event, options = {}) {
-    const { updateHistory = true } = options;
-    if (event) {
-      event.preventDefault();
+    // Switching videos inside the overlay replaces its history entry, so one Back always closes it.
+    // (Re-opened while a close is still popping the old entry: that popstate re-adds it.)
+    if (updateHistory && !historyBackPending) {
+      const state = { videoOverlay: true, videoId: id };
+      const url = appUrl(`/watch/${id}`);
+      if (history.state && history.state.videoOverlay) {
+        history.replaceState(state, '', url);
+      } else {
+        history.pushState(state, '', url);
+      }
     }
+
+    videoPreviewManager.pause();
 
     try {
-      // Show loading state
-      const overlay = document.getElementById('video-overlay');
-      const playerContainer = document.querySelector('.video-overlay-player-container');
-      const overlayVideo = document.getElementById('overlay-video-player');
-      overlayVideo.classList.remove('is-ready');
-      playerContainer.classList.remove('is-video-ready');
-      
-      // Add loading indicator
-      const loadingOverlay = document.createElement('div');
-      loadingOverlay.className = 'video-overlay-loading';
-      loadingOverlay.innerHTML = '<div class="loading-spinner"></div>';
-      playerContainer.appendChild(loadingOverlay);
-      
-      showOverlayWithTransition(overlay, event);
-      
-      // Update URL
-      if (updateHistory) {
-        const newUrl = appUrl(`/watch/${videoId}`);
-        history.pushState({ videoOverlay: true, videoId }, '', newUrl);
-      }
-
-      // Suspend preview system to free up resources
-      if (videoPreviewManager) {
-        videoPreviewManager.pause();
-      }
-
-      // Load video metadata
-      const response = await fetch(appUrl(`/api/videos/${videoId}`));
-      if (!response.ok) {
-        throw new Error('Failed to fetch video');
-      }
-      const video = await response.json();
-      
-      // Store current video data
-      overlayCurrentVideoId = videoId;
-      overlayVideoMetadata = video;
-      overlayBaseShareUrl = null; // Reset share URL
-      
-      // Update overlay UI
-      document.getElementById('overlay-video-title').textContent = video.title;
-      
-      const addedDate = new Date(video.added_date);
-      document.getElementById('overlay-video-date').textContent = addedDate.toLocaleDateString();
-      document.getElementById('overlay-video-duration').textContent = video.duration_formatted;
-      
-      // Update page title
-      document.title = `${vodsName} - ${video.title}`;
-      
-      // Initialize video player
-      overlayVideo.src = appUrl(`/api/videos/${videoId}/stream`);
-
-      const removeLoadingOverlay = () => {
-        if (loadingOverlay.parentNode) {
-          loadingOverlay.remove();
+      let video = allVideos.find((candidate) => String(candidate.id) === id);
+      if (!video) {
+        const controller = new AbortController();
+        overlayFetchController = controller;
+        const response = await fetch(appUrl(`/api/videos/${id}`), { signal: controller.signal });
+        if (!response.ok) {
+          throw new Error(`Failed to fetch video (status: ${response.status})`);
         }
-      };
+        video = await response.json();
+        if (!isCurrent()) return;
+        overlayFetchController = null;
+      }
 
-      const onOverlayReady = () => {
-        cleanupOverlayLoadingListeners();
-        removeLoadingOverlay();
-        playerContainer.classList.add('is-video-ready');
-        overlayVideo.classList.add('is-ready');
-      };
+      document.getElementById('overlay-video-title').textContent = video.title;
+      document.getElementById('overlay-video-date').textContent = new Date(video.added_date).toLocaleDateString();
+      document.getElementById('overlay-video-duration').textContent = formatVideoDuration(video);
+      document.title = `${vodsName} - ${video.title}`;
 
-      const cleanupOverlayLoadingListeners = () => {
-        clearTimeout(overlayLoadingFallbackTimeout);
-        overlayVideo.removeEventListener('playing', onOverlayReady);
-        overlayVideo.removeEventListener('canplay', onOverlayReady);
-        overlayVideo.removeEventListener('error', onOverlayReady);
-      };
+      const plyrAvailable = await PlayerCore.loadPlyr().then(() => true, (error) => {
+        console.warn('Plyr unavailable, using native controls:', error);
+        return false;
+      });
+      if (!isCurrent()) return;
 
-      // Hide loader when playback is actually ready, not on an arbitrary timer.
-      overlayVideo.addEventListener('playing', onOverlayReady, { once: true });
-      overlayVideo.addEventListener('canplay', onOverlayReady, { once: true });
-      overlayVideo.addEventListener('error', onOverlayReady, { once: true });
+      const overlayVideo = getOverlayVideo();
+      if (plyrAvailable) {
+        overlayPlayer = PlayerCore.createPlayer(overlayVideo, {
+          deathTimestamps: PlayerCore.parseDeathTimestamps(video.death_timestamps)
+        });
+      }
 
-      // Safety fallback in case media events are delayed/missed.
-      const overlayLoadingFallbackTimeout = setTimeout(() => {
-        cleanupOverlayLoadingListeners();
-        removeLoadingOverlay();
-      }, 8000);
+      // Hide the spinner once playback can start (or fails), with a safety timeout.
+      overlayMediaListeners = new AbortController();
+      ['playing', 'canplay', 'error'].forEach((eventName) => {
+        overlayVideo.addEventListener(eventName, () => setOverlayVideoReady(true), { once: true, signal: overlayMediaListeners.signal });
+      });
+      overlayReadyTimer = setTimeout(() => setOverlayVideoReady(true), 8000);
 
-      // Initialize Plyr
-      initializeOverlayPlayer(video);
-
-      
-      // Update favorite button state
-      updateOverlayFavoriteButton(videoId);
-      
-      // Focus on close button for accessibility
-      setTimeout(() => {
-        document.querySelector('.video-overlay-close').focus();
-      }, 100);
-      
+      overlayVideo.src = appUrl(`/api/videos/${id}/stream`);
+      if (!plyrAvailable) {
+        overlayVideo.play().catch(() => {});
+      }
     } catch (error) {
+      if (!isCurrent() || error.name === 'AbortError') return;
       console.error('Error opening video overlay:', error);
       showToast('Failed to load video. Please try again.', 'error');
       closeVideoOverlay();
     }
   }
-  
+
   /**
-   * Close the video overlay
+   * Close the overlay; cancels any pending open
    */
-  function closeVideoOverlay(options = {}) {
-    const { updateHistory = true } = options;
-    const overlay = document.getElementById('video-overlay');
-    const playerContainer = document.querySelector('.video-overlay-player-container');
-
-
-    clearOverlayOpenTransition();
-    clearOverlayCloseTransition();
-    const transitionNonce = beginOverlayTransition();
-
-    const animateClose = (overlay.classList.contains('visible') || overlay.classList.contains('is-opening')) && !shouldUseReducedMotion();
-    if (animateClose) {
-      overlay.classList.remove('visible');
-      overlay.classList.remove('is-opening');
-      overlay.classList.remove('has-origin');
-      resetOverlayTransformVariables(overlay);
-      overlay.classList.add('is-closing');
-      overlayCloseTransitionCleanup = watchOverlayContainerTransition(overlay, OVERLAY_CLOSE_TRANSITION_MS, () => {
-        overlayCloseTransitionCleanup = null;
-        if (!isActiveOverlayTransition(transitionNonce)) return;
-        finalizeOverlayClose(overlay, updateHistory);
-      });
-    } else {
-      finalizeOverlayClose(overlay, updateHistory);
+  function closeVideoOverlay({ updateHistory = true } = {}) {
+    if (!isOverlayOpen()) return;
+    overlayGeneration += 1;
+    if (overlayFetchController) {
+      overlayFetchController.abort();
+      overlayFetchController = null;
     }
 
-    // Resume preview system
-    if (videoPreviewManager) {
-      videoPreviewManager.resume();
-    }
-
-    // Clean up Plyr player
-    if (overlayPlyrPlayer) {
-      try {
-        overlayPlyrPlayer.pause();
-        overlayPlyrPlayer.destroy();
-      } catch (error) {
-        console.warn('Error destroying Plyr player:', error);
-      }
-      overlayPlyrPlayer = null;
-    }
-    
-    // Clear video source
-    const overlayVideo = document.getElementById('overlay-video-player');
-    playerContainer.classList.remove('is-video-ready');
-    overlayVideo.classList.remove('is-ready');
-    if (overlayVideo.src && overlayVideo.src.startsWith('blob:')) {
-      URL.revokeObjectURL(overlayVideo.src);
-    }
-    overlayVideo.src = '';
-    overlayVideo.load();
-    
-    // Reset state
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('overlay-open');
+    teardownOverlayPlayer();
     overlayCurrentVideoId = null;
-    overlayVideoMetadata = null;
-    overlayBaseShareUrl = null;
-    
-    // Remove any loading overlays
-    const loadingOverlays = document.querySelectorAll('.video-overlay-loading');
-    loadingOverlays.forEach(overlay => overlay.remove());
-  }
-  
-  /**
-   * Initialize Plyr player for overlay
-   * @param {Object} video - Video metadata object
-   */
-  function initializeOverlayPlayer(video) {
-    // Destroy existing player
-    if (overlayPlyrPlayer) {
-      try {
-        overlayPlyrPlayer.destroy();
-      } catch (error) {
-        console.warn('Error destroying previous Plyr instance:', error);
+    overlayShareMenu.close();
+    setBackgroundInert(false);
+    document.title = vodsName;
+
+    if (overlayReturnFocus && overlayReturnFocus.isConnected) {
+      overlayReturnFocus.focus({ preventScroll: true });
+    }
+    overlayReturnFocus = null;
+    videoPreviewManager.resume();
+
+    if (updateHistory) {
+      if (history.state && history.state.videoOverlay) {
+        historyBackPending = true;
+        history.back(); // Pop the overlay's own entry, so Back does not re-open this video
+      } else if (window.location.pathname !== appUrl('/')) {
+        history.replaceState(null, '', appUrl('/'));
       }
     }
-    
-    const overlayVideo = document.getElementById('overlay-video-player');
-    
-    // Plyr options (similar to player.js)
-    const options = {
-      controls: [
-        'play-large',
-        'play',
-        'progress',
-        'current-time',
-        'duration',
-        'mute',
-        'volume',
-        'captions',
-        'settings',
-        'pip',
-        'airplay',
-        'fullscreen'
-      ],
-      settings: ['captions', 'quality', 'speed', 'loop'],
-      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-      keyboard: { focused: true, global: false }, // Disable global shortcuts when in overlay
-      tooltips: { controls: true, seek: true },
-      autoplay: true
-    };
-    
-    overlayPlyrPlayer = new Plyr(overlayVideo, options);
-    const initialTimestamp = getOverlayTimestampFromUrl();
-    const seekToInitialTimestamp = initialTimestamp !== null
-      ? createDeferredOverlayTimestampSeek(overlayPlyrPlayer, overlayVideo, initialTimestamp)
-      : null;
 
-    overlayPlyrPlayer.on('ready', () => {
-      console.log('Overlay Plyr player ready');
-
-      if (seekToInitialTimestamp) {
-        seekToInitialTimestamp();
-      }
-    });
-    
-    // Handle metadata loaded for death markers
-    overlayPlyrPlayer.on('loadedmetadata', () => {
-      if (video.death_timestamps && overlayPlyrPlayer.duration) {
-        try {
-          const deathTimestamps = JSON.parse(video.death_timestamps);
-          if (Array.isArray(deathTimestamps)) {
-            displayOverlayDeathMarkers(deathTimestamps, overlayPlyrPlayer.duration);
-          }
-        } catch (error) {
-          console.error('Error parsing death timestamps:', error);
-        }
-      }
-    });
-    
-    overlayPlyrPlayer.on('error', (event) => {
-      console.error('Overlay player error:', event);
-      showToast('Error playing video. Please try again.', 'error');
-    });
+    // A re-open cancels this motion (the promise rejects), so the overlay stays shown.
+    animateOverlay(false, 'translateY(14px) scale(0.992)').then(() => {
+      if (!isOverlayOpen()) overlay.classList.remove('visible');
+    }, () => {});
   }
 
-  function getOverlayTimestampFromUrl() {
-    const timestamp = new URLSearchParams(window.location.search).get('t');
-    if (timestamp === null) return null;
-
-    const seconds = Number(timestamp);
-    if (!Number.isFinite(seconds) || seconds < 0) return null;
-
-    return Math.floor(seconds);
-  }
-
-  function createDeferredOverlayTimestampSeek(player, mediaElement, targetTime) {
-    const maxAttempts = 20;
-    const retryDelayMs = 250;
-    const seekEvents = ['loadedmetadata', 'durationchange', 'canplay', 'playing'];
-    let attempts = 0;
-    let retryTimer = null;
-    let completed = false;
-
-    const cleanup = () => {
-      seekEvents.forEach(eventName => {
-        mediaElement.removeEventListener(eventName, attemptSeek);
-      });
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-        retryTimer = null;
-      }
-    };
-
-    const scheduleRetry = () => {
-      if (completed || attempts >= maxAttempts || retryTimer) return;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        attemptSeek();
-      }, retryDelayMs);
-    };
-
-    function attemptSeek() {
-      if (completed) return;
-      attempts += 1;
-
-      try {
-        player.currentTime = targetTime;
-
-        const actualTime = Number(player.currentTime || mediaElement.currentTime || 0);
-        if (Math.abs(actualTime - targetTime) < 1) {
-          completed = true;
-          cleanup();
-          console.log(`Overlay seeked to timestamp: ${targetTime}s`);
-          return;
-        }
-
-        if (attempts >= maxAttempts) {
-          completed = true;
-          cleanup();
-          console.warn(`Overlay timestamp seek did not settle near ${targetTime}s`);
-          return;
-        }
-      } catch (error) {
-        if (attempts >= maxAttempts) {
-          completed = true;
-          cleanup();
-          console.error('Overlay timestamp seek failed:', error);
-          return;
-        }
-      }
-
-      scheduleRetry();
+  function updateGridFavorite(videoId, favorited) {
+    const gridCard = findGridCard(videoId);
+    const gridButton = gridCard ? gridCard.querySelector('.favorite-indicator-grid') : null;
+    if (gridButton) {
+      renderGridFavorite(gridButton, favorited);
     }
-
-    seekEvents.forEach(eventName => {
-      mediaElement.addEventListener(eventName, attemptSeek);
-    });
-
-    return attemptSeek;
   }
-  
-  /**
-   * Display death markers on overlay player timeline
-   * @param {number[]} timestamps - Array of death timestamps in seconds
-   * @param {number} duration - Video duration in seconds
-   */
-  function displayOverlayDeathMarkers(timestamps, duration) {
-    if (!duration || duration <= 0 || !timestamps || timestamps.length === 0) {
+
+  function handleOverlayPopState() {
+    if (historyBackPending) {
+      historyBackPending = false;
+      if (overlayCurrentVideoId) {
+        history.pushState({ videoOverlay: true, videoId: overlayCurrentVideoId }, '', appUrl(`/watch/${overlayCurrentVideoId}`));
+      }
       return;
     }
-    
-    const playerContainer = document.querySelector('.video-overlay-player-container');
-    const progressTrack = playerContainer.querySelector('.plyr__progress input[type=range]');
-    
-    let progressElement;
-    if (!progressTrack) {
-      const progressContainer = playerContainer.querySelector('.plyr__progress__container');
-      if (!progressContainer) {
-        console.warn('Could not find progress container for death markers');
-        return;
-      }
-      progressElement = progressContainer;
-    } else {
-      progressElement = progressTrack.parentElement;
-    }
-    
-    // Clear existing markers
-    const existingMarkers = progressElement.querySelectorAll('.death-marker');
-    existingMarkers.forEach(marker => marker.remove());
-    
-    // Add new markers
-    timestamps.forEach(timestamp => {
-      if (timestamp >= 0 && timestamp <= duration) {
-        const percentage = (timestamp / duration) * 100;
-        const marker = document.createElement('div');
-        marker.className = 'death-marker';
-        marker.style.left = `${percentage}%`;
-        marker.title = `Death at ${formatOverlayTime(timestamp)}`;
-        progressElement.appendChild(marker);
-      }
-    });
-  }
-  
-  /**
-   * Format time for overlay display
-   * @param {number} seconds - Time in seconds
-   * @returns {string} Formatted time string
-   */
-  function formatOverlayTime(seconds) {
-    const date = new Date(0);
-    date.setSeconds(seconds);
-    const timeString = date.toISOString().substr(11, 8);
-    return timeString.startsWith('00:') ? timeString.substr(3) : timeString;
-  }
-  
-  /**
-   * Update overlay favorite button state
-   * @param {string} videoId - Video ID
-   */
-  function updateOverlayFavoriteButton(videoId) {
-    const favoriteBtn = document.getElementById('overlay-favorite-btn');
-    const favoriteText = favoriteBtn.querySelector('.favorite-text');
-    const isFavorited = isFavorite(videoId);
-    
-    if (isFavorited) {
-      favoriteBtn.classList.add('active');
-      favoriteText.textContent = 'Remove from Favorites';
-    } else {
-      favoriteBtn.classList.remove('active');
-      favoriteText.textContent = 'Add to Favorites';
-    }
-  }
-  
-  /**
-   * Handle overlay favorite button click
-   */
-  function handleOverlayFavoriteClick() {
-    if (!overlayCurrentVideoId) return;
-    
-    const isNowFavorited = toggleFavorite(overlayCurrentVideoId);
-    updateOverlayFavoriteButton(overlayCurrentVideoId);
-    
-    showToast(isNowFavorited ? 'Added to favorites' : 'Removed from favorites');
-    
-    // Update the main grid if this video is visible
-    const gridCard = document.querySelector(`.video-card[data-id="${overlayCurrentVideoId}"]`);
-    if (gridCard) {
-      const gridIndicator = gridCard.querySelector('.favorite-indicator-grid');
-      if (gridIndicator) {
-        gridIndicator.classList.toggle('favorited', isNowFavorited);
-      }
-    }
-  }
-  
-  /**
-   * Extract a video ID from a watch page path, relative to the document base
-   * @param {string} path - The current window location pathname
-   * @returns {string|null} - The video ID, or null if the path is not a watch path
-   */
-  function getWatchVideoIdFromPath(path) {
-    const basePath = appUrl('/');
-    let relativePath = path;
-    if (relativePath.startsWith(basePath)) {
-      relativePath = relativePath.slice(basePath.length);
-    }
-    relativePath = relativePath.replace(/^\/+/, '');
-    const match = relativePath.match(/^watch\/(\d+)$/);
-    return match ? match[1] : null;
-  }
-
-  /**
-   * Handle browser back/forward navigation
-   */
-  function handleOverlayPopState(event) {
-    const videoId = getWatchVideoIdFromPath(window.location.pathname);
-    
+    const videoId = PlayerCore.videoIdFromPath(window.location.pathname);
     if (videoId) {
-      // URL indicates we should show overlay
-      if (!overlayCurrentVideoId || overlayCurrentVideoId !== videoId) {
+      if (overlayCurrentVideoId !== videoId) {
         openVideoOverlay(videoId, null, { updateHistory: false });
       }
-    } else {
-      // URL indicates we should close overlay
-      if (overlayCurrentVideoId) {
-        closeVideoOverlay({ updateHistory: false });
-      }
+    } else if (overlayCurrentVideoId) {
+      closeVideoOverlay({ updateHistory: false });
     }
   }
 
-  /**
-   * Share functionality for overlay
-   */
-  
-  /**
-   * Toggle overlay share popover visibility
-   */
-  function toggleOverlaySharePopover() {
-    const sharePopover = document.getElementById('overlay-share-popover');
-    const currentTimeDisplay = document.getElementById('overlay-popover-current-time');
-    
-    const isVisible = sharePopover.classList.toggle('visible');
-    
-    if (isVisible && overlayPlyrPlayer) {
-      const currentTime = Math.round(overlayPlyrPlayer.currentTime);
-      currentTimeDisplay.textContent = `Current time: ${formatOverlayTime(currentTime)}`;
-    }
-  }
-  
-  /**
-   * Copy base share link (without timestamp)
-   */
-  async function handleOverlayCopyBaseLink() {
-    if (!overlayBaseShareUrl) {
-      await fetchOverlayBaseShareUrl();
-      if (!overlayBaseShareUrl) {
-        showToast('Could not get share link.', 'error');
-        return;
-      }
-    }
-    
-    copyOverlayToClipboard(overlayBaseShareUrl, document.getElementById('overlay-copy-base-link-btn'));
-    document.getElementById('overlay-share-popover').classList.remove('visible');
-  }
-  
-  /**
-   * Copy timestamped share link
-   */
-  async function handleOverlayCopyTimestampLink() {
-    if (!overlayPlyrPlayer || typeof overlayPlyrPlayer.currentTime === 'undefined') {
-      showToast('Player not ready.', 'error');
-      return;
-    }
-    
-    if (!overlayBaseShareUrl) {
-      await fetchOverlayBaseShareUrl();
-      if (!overlayBaseShareUrl) {
-        showToast('Could not get share link.', 'error');
-        return;
-      }
-    }
-    
-    const currentTime = Math.round(overlayPlyrPlayer.currentTime);
-    const timestampedUrl = `${overlayBaseShareUrl}?t=${currentTime}`;
-    
-    copyOverlayToClipboard(timestampedUrl, document.getElementById('overlay-copy-timestamp-link-btn'));
-    document.getElementById('overlay-share-popover').classList.remove('visible');
-  }
-  
-  /**
-   * Fetch base share URL for current overlay video
-   */
-  async function fetchOverlayBaseShareUrl() {
-    if (overlayBaseShareUrl || !overlayCurrentVideoId) return;
-    
-    try {
-      const response = await fetch(appUrl(`/api/share/${overlayCurrentVideoId}`));
-      if (!response.ok) {
-        throw new Error('Failed to generate share link');
-      }
-      const data = await response.json();
-      overlayBaseShareUrl = data.shareLink;
-    } catch (error) {
-      console.error('Error generating overlay share link:', error);
-      overlayBaseShareUrl = null;
-    }
-  }
-  
-  /**
-   * Copy text to clipboard with feedback
-   * @param {string} text - Text to copy
-   * @param {HTMLElement} buttonElement - Button that was clicked
-   */
-  function copyOverlayToClipboard(text, buttonElement) {
-    navigator.clipboard.writeText(text).then(() => {
-      const originalText = buttonElement.textContent;
-      buttonElement.textContent = 'Copied!';
-      buttonElement.disabled = true;
-      showToast('Link copied to clipboard!', 'success');
-      setTimeout(() => {
-        buttonElement.textContent = originalText;
-        buttonElement.disabled = false;
-      }, 2000);
-    }).catch(err => {
-      console.error('Failed to copy text:', err);
-      showToast('Failed to copy link.', 'error');
+  function updateFavoriteIndicatorsOnGrid() {
+    videosGrid.querySelectorAll('.favorite-indicator-grid').forEach((button) => {
+      renderGridFavorite(button, isFavorite(button.dataset.videoId));
     });
   }
 
-  // Make overlay functions globally available
-  window.openVideoOverlay = openVideoOverlay;
-  window.closeVideoOverlay = closeVideoOverlay;
-
   // --- Event Listeners ---
-  searchInput.addEventListener('focus', () => searchInput.parentElement.classList.add('focused'));
-  searchInput.addEventListener('blur', () => searchInput.parentElement.classList.remove('focused'));
+  videosGrid.addEventListener('click', handleVideoGridClick);
+  videosGrid.addEventListener('pointermove', handleVideoGridPointerMove);
+  videosGrid.addEventListener('pointerleave', handleVideoGridPointerLeave);
+  videosGrid.addEventListener('pointerover', handleFirstCardHover);
+  videosGrid.addEventListener('animationend', (event) => {
+    event.target.classList.remove('card-enter');
+  });
+  window.addEventListener('scroll', clearActiveCardTilt, { passive: true });
+  window.addEventListener('blur', clearActiveCardTilt);
+  videoPreviewManager.attachToGrid(videosGrid);
+
+  searchInput.addEventListener('input', handleSearchInput);
+  searchInput.addEventListener('keydown', handleSearchKeyDown);
+  searchButton.addEventListener('click', runSearch);
+  advancedSearchToggle.addEventListener('change', handleAdvancedSearchToggle);
   refreshBtn.addEventListener('click', refreshLibrary);
   sortSelect.addEventListener('change', handleSortChange);
-  searchInput.addEventListener('input', handleSearchInput);
-  searchInput.addEventListener('keypress', handleSearchKeyPress);
-  if (searchButton) {
-    searchButton.addEventListener('click', handleSearchButtonClick);
-  }
   favoritesToggle.addEventListener('change', handleFavoritesToggle);
-  if (advancedSearchToggle) {
-    advancedSearchToggle.addEventListener('change', handleAdvancedSearchToggle);
-  }
-  
-  // Video overlay event listeners
-  document.getElementById('overlay-favorite-btn').addEventListener('click', handleOverlayFavoriteClick);
-  document.getElementById('overlay-share-toggle-btn').addEventListener('click', toggleOverlaySharePopover);
-  document.getElementById('overlay-copy-base-link-btn').addEventListener('click', handleOverlayCopyBaseLink);
-  document.getElementById('overlay-copy-timestamp-link-btn').addEventListener('click', handleOverlayCopyTimestampLink);
+
+  overlayBackdrop.addEventListener('click', () => closeVideoOverlay());
+  overlayCloseButton.addEventListener('click', () => closeVideoOverlay());
+  PlayerCore.bindFavoriteButton(overlayFavoriteBtn, () => overlayCurrentVideoId, updateGridFavorite);
   window.addEventListener('popstate', handleOverlayPopState);
-  
-  // Close share popover on outside click
-  document.addEventListener('click', (event) => {
-    const sharePopover = document.getElementById('overlay-share-popover');
-    const shareButton = document.getElementById('overlay-share-toggle-btn');
-    if (sharePopover.classList.contains('visible') && 
-        !sharePopover.contains(event.target) && 
-        !shareButton.contains(event.target)) {
-      sharePopover.classList.remove('visible');
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !isOverlayOpen()) return;
+    if (overlayPlayer && overlayPlayer.fullscreen && overlayPlayer.fullscreen.active) return; // Plyr exits fullscreen first
+    event.preventDefault();
+    closeVideoOverlay();
+  });
+
+  // Back/forward cache: favorites may have changed on the player page; the update stream was closed.
+  window.addEventListener('pagehide', () => {
+    if (sseEventSource) {
+      sseEventSource.close();
+      sseEventSource = null;
     }
   });
-  
-  // Keyboard navigation for overlay
-  document.addEventListener('keydown', (event) => {
-    const overlay = document.getElementById('video-overlay');
-    if (overlay.classList.contains('visible')) {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeVideoOverlay();
-      }
+  window.addEventListener('pageshow', (event) => {
+    if (event.persisted) {
+      reloadFavorites();
+      updateFavoriteIndicatorsOnGrid();
+      if (!sseEventSource) connectSSE();
     }
   });
 
   // --- Initial Load ---
-  vodsNamePromise.then((name) => {
-    vodsName = name;
+  getAppConfig().then((config) => {
+    vodsName = config.vodsName;
     document.getElementById('app-title').textContent = vodsName;
     document.getElementById('footer-text').textContent = `© ${vodsName} - A simple VOD sharing system`;
     if (!overlayCurrentVideoId) {
       document.title = vodsName;
     }
-  });
-
-  loadVideos(currentPage, false); // Initial load of page 1
-  sortSelect.value = sortBy; // Set dropdown to reflect default sort
-  pollScanStatus(); // Check initial scan status on page load
-  connectSSE(); // Connect to Server-Sent Events
-  initializeInfiniteScroll();
-
-  // DOMContentLoaded and the preceding listeners are the readiness boundary.
-  const videoIdFromPath = getWatchVideoIdFromPath(window.location.pathname);
-  if (videoIdFromPath) {
-    openVideoOverlay(videoIdFromPath, null, { updateHistory: false });
-  }
-
-  /**
-   * Update favorite indicators on the grid based on current localStorage status.
-   */
-  function updateFavoriteIndicatorsOnGrid() {
-    const videoCards = videosGrid.querySelectorAll('.video-card');
-    videoCards.forEach(card => {
-      const videoId = card.dataset.id;
-      const indicator = card.querySelector('.favorite-indicator-grid');
-      if (videoId && indicator) {
-        const isNowFavorite = VideoUtils.isFavorite(videoId);
-        indicator.classList.toggle('favorited', isNowFavorite);
-      }
-    });
-  }
-
-  // Add event listener for pageshow to update favorites when navigating back
-  window.addEventListener('pageshow', (event) => {
-    // event.persisted is true if the page is loaded from the cache (like when using back button)
-    if (event.persisted) {
-      console.log('Page loaded from cache (pageshow event). Updating favorite indicators.');
-      updateFavoriteIndicatorsOnGrid();
+    if (config.advancedSearch !== true) {
+      hideAdvancedSearch();
     }
   });
 
+  sortSelect.value = sortBy;
+  loadVideos(false);
+  checkScanStatus();
+  connectSSE();
+  initializeInfiniteScroll();
 });

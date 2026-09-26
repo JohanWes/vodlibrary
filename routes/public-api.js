@@ -1,9 +1,13 @@
 const express = require('express');
-const path = require('path');
 const fs = require('fs');
-const { getVideoById } = require('../db/database');
+const path = require('path');
+const { getVideoById, getVideoStreamInfo } = require('../db/database');
 const cdnManager = require('../lib/cdn');
+const { parseCanonicalInt } = require('../lib/parse');
 
+// Media routes: preview clips and the full video stream. Mounted after
+// checkAuth in server.js, so everything here requires a session (or a share
+// cookie scoped to /api/videos/<id>/stream).
 const router = express.Router();
 
 function parsePreviewClips(rawPreviewClips) {
@@ -18,76 +22,83 @@ function parsePreviewClips(rawPreviewClips) {
   }
 }
 
-function normalizePublicAssetPath(assetPath) {
-  return String(assetPath || '').replace(/^\/+/, '');
+function mediaCacheControl(maxAgeSeconds) {
+  return `${process.env.ENABLE_AUTH === 'true' ? 'private' : 'public'}, max-age=${maxAgeSeconds}`;
 }
 
-function parseCanonicalSafeInteger(value, positive) {
-  if (typeof value !== 'string' || value.length === 0) {
-    return null;
-  }
+// Headers `send` sets before it can fail; none of them belong on an error.
+const SUCCESS_ONLY_HEADERS = ['Cache-Control', 'ETag', 'Last-Modified', 'Content-Type', 'Content-Length', 'Content-Range'];
+const NOT_FOUND_CODES = new Set(['ENOENT', 'ENOTDIR', 'EISDIR', 'ENAMETOOLONG']);
+const ABORTED_CODES = new Set(['ECONNABORTED', 'ECONNRESET']);
 
-  const pattern = positive ? /^[1-9]\d*$/ : /^(0|[1-9]\d*)$/;
-  if (!pattern.test(value)) {
-    return null;
-  }
-
-  const numeric = Number(value);
-  if (!Number.isSafeInteger(numeric)) {
-    return null;
-  }
-
-  return numeric;
-}
-function parseByteRange(rangeHeader, size) {
-  if (typeof rangeHeader !== 'string' || size <= 0) {
-    return null;
-  }
-
-  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/);
-  if (!match || (match[1] === '' && match[2] === '')) {
-    return null;
-  }
-
-  if (match[1] === '') {
-    const suffixLength = Number(match[2]);
-    if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
-      return null;
+/**
+ * Serve `basename` from `dir` with Range/HEAD/conditional-request support via
+ * res.sendFile (`send`). `send` confines the file to `root` (rejecting `..`,
+ * empty names and dotfiles), which is the only containment check needed for
+ * a basename taken from the database; `dir` itself is trusted.
+ */
+async function sendMediaFile(req, res, dir, basename, { cacheControl, notFoundMessage, errorMessage }) {
+  // `send` never opens the file for HEAD, so an unreadable file would answer
+  // 200 there while GET fails with 500. Names `send` rejects anyway (empty,
+  // dotfiles, `..`) and other errors (missing file, ...) are left to it.
+  if (basename && !basename.startsWith('.')) {
+    try {
+      await fs.promises.access(path.join(dir, basename), fs.constants.R_OK);
+    } catch (err) {
+      if (err.code === 'EACCES' || err.code === 'EPERM') {
+        console.error(`Error serving ${req.originalUrl}:`, err);
+        res.status(500).json({ error: errorMessage });
+        return;
+      }
     }
-    return {
-      start: Math.max(0, size - suffixLength),
-      end: size - 1
-    };
   }
 
-  const start = Number(match[1]);
-  const requestedEnd = match[2] === '' ? size - 1 : Number(match[2]);
-  if (!Number.isSafeInteger(start) ||
-      !Number.isSafeInteger(requestedEnd) ||
-      start >= size ||
-      requestedEnd < start) {
-    return null;
-  }
+  res.sendFile(basename, {
+    root: dir,
+    dotfiles: 'deny',
+    acceptRanges: true,
+    cacheControl: false,
+    headers: { 'Cache-Control': cacheControl }
+  }, (err) => {
+    if (!err) {
+      return;
+    }
+    if (res.headersSent || ABORTED_CODES.has(err.code)) {
+      // The client went away (routine when seeking or closing the player), or
+      // the read failed mid-body: nothing useful can be sent.
+      if (!ABORTED_CODES.has(err.code)) {
+        console.error(`Error streaming ${req.originalUrl}:`, err);
+      }
+      res.destroy();
+      return;
+    }
 
-  return {
-    start,
-    end: Math.min(requestedEnd, size - 1)
-  };
-}
+    const status = err.status || err.statusCode;
+    for (const header of SUCCESS_ONLY_HEADERS) {
+      res.removeHeader(header);
+    }
 
+    if (status === 416) {
+      res.setHeader('Content-Range', (err.headers && err.headers['Content-Range']) || '');
+      res.status(416).end();
+      return;
+    }
+    if (status === 412) {
+      res.status(412).end();
+      return;
+    }
+    if (status === 404 || status === 403 || NOT_FOUND_CODES.has(err.code)) {
+      res.status(404).json({ error: notFoundMessage });
+      return;
+    }
 
-function isSafeClipPath(clipPath) {
-  const segments = clipPath.split('/');
-  if (segments.some((segment) => segment === '..')) {
-    return false;
-  }
-
-  const basename = segments[segments.length - 1];
-  return basename !== '' && basename !== '.' && basename !== '..';
+    console.error(`Error serving ${req.originalUrl}:`, err);
+    res.status(500).json({ error: errorMessage });
+  });
 }
 
 router.get('/videos/:id/preview-info', async (req, res) => {
-  const videoId = parseCanonicalSafeInteger(req.params.id, true);
+  const videoId = parseCanonicalInt(req.params.id);
   if (videoId === null) {
     return res.status(400).json({ error: 'Invalid video id' });
   }
@@ -113,95 +124,79 @@ router.get('/videos/:id/preview-info', async (req, res) => {
 });
 
 router.get('/videos/:id/preview/:timestamp?', async (req, res) => {
-  const videoId = parseCanonicalSafeInteger(req.params.id, true);
+  const videoId = parseCanonicalInt(req.params.id);
   if (videoId === null) {
     return res.status(400).json({ error: 'Invalid video id' });
   }
 
-  const timestamp = parseCanonicalSafeInteger(req.params.timestamp || '10', false);
+  const timestamp = parseCanonicalInt(req.params.timestamp || '10', { allowZero: true });
   if (timestamp === null) {
     return res.status(400).json({ error: 'Invalid timestamp' });
   }
 
+  let video;
   try {
-    const db = req.app.locals.db;
-    const video = await getVideoById(db, videoId);
-
-    if (!video) {
-      return res.status(404).json({ error: 'Video not found' });
-    }
-
-    const previewClips = parsePreviewClips(video.preview_clips);
-
-    if (!previewClips || !Array.isArray(previewClips.clips)) {
-      return res.status(404).json({ error: 'Preview clip not found' });
-    }
-
-    const clip = previewClips.clips.find((candidate) => Number(candidate.timestamp) === timestamp);
-    if (!clip) {
-      return res.status(404).json({ error: 'Preview clip not found' });
-    }
-
-    const normalizedClipPath = normalizePublicAssetPath(clip.path);
-    if (!isSafeClipPath(normalizedClipPath)) {
-      return res.status(404).json({ error: 'Preview file not found' });
-    }
-
-    const previewsDir = process.env.PREVIEWS_CACHE_DIR || path.join(__dirname, '..', 'public', 'previews');
-    const previewPath = path.join(previewsDir, path.basename(normalizedClipPath));
-
-    try {
-      await fs.promises.access(previewPath, fs.constants.R_OK);
-    } catch (_error) {
-      return res.status(404).json({ error: 'Preview file not found' });
-    }
-
-    const stat = await fs.promises.stat(previewPath);
-
-    if (process.env.ENABLE_AUTH !== 'true' && cdnManager.shouldUseCdn(req.originalUrl, 'preview')) {
-      const clipPathForCdn = clip.path.startsWith('/') ? clip.path : `/${clip.path}`;
-      const cdnUrl = cdnManager.getCdnUrl(clipPathForCdn, 'preview');
-      return res.redirect(cdnUrl);
-    }
-
-    const rangeHeader = req.headers.range;
-    const range = rangeHeader ? parseByteRange(rangeHeader, stat.size) : null;
-    res.setHeader('Cache-Control', `${process.env.ENABLE_AUTH === 'true' ? 'private' : 'public'}, max-age=86400`);
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-
-    if (rangeHeader && !range) {
-      res.setHeader('Content-Range', `bytes */${stat.size}`);
-      return res.status(416).end();
-    }
-
-    if (range) {
-      res.status(206);
-      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${stat.size}`);
-      res.setHeader('Content-Length', (range.end - range.start) + 1);
-    } else {
-      res.setHeader('Content-Length', stat.size);
-    }
-
-    if (req.method === 'HEAD') {
-      return res.end();
-    }
-
-    const stream = fs.createReadStream(previewPath, range || undefined);
-    stream.on('error', (streamError) => {
-      console.error(`Error streaming preview for video ${req.params.id}:`, streamError);
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Failed to serve preview' });
-      } else {
-        res.destroy(streamError);
-      }
-    });
-    stream.pipe(res);
-    return undefined;
+    video = await getVideoById(req.app.locals.db, videoId);
   } catch (error) {
     console.error(`Error serving preview for video ${req.params.id}:`, error);
     return res.status(500).json({ error: 'Failed to serve preview' });
   }
+
+  if (!video) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  const previewClips = parsePreviewClips(video.preview_clips);
+  if (!previewClips || !Array.isArray(previewClips.clips)) {
+    return res.status(404).json({ error: 'Preview clip not found' });
+  }
+
+  const clip = previewClips.clips.find((candidate) => Number(candidate.timestamp) === timestamp);
+  if (!clip) {
+    return res.status(404).json({ error: 'Preview clip not found' });
+  }
+
+  const previewsDir = process.env.PREVIEWS_CACHE_DIR || path.join(__dirname, '..', 'public', 'previews');
+  return sendMediaFile(req, res, path.resolve(previewsDir), path.basename(String(clip.path || '')), {
+    cacheControl: mediaCacheControl(86400),
+    notFoundMessage: 'Preview file not found',
+    errorMessage: 'Failed to serve preview'
+  });
+});
+
+router.get('/videos/:id/stream', async (req, res) => {
+  const videoId = parseCanonicalInt(req.params.id);
+  if (videoId === null) {
+    return res.status(400).json({ error: 'Invalid video id' });
+  }
+
+  let video;
+  try {
+    video = await getVideoStreamInfo(req.app.locals.db, videoId);
+  } catch (error) {
+    console.error(`Error streaming video ${req.params.id}:`, error);
+    return res.status(500).json({ error: 'Failed to stream video' });
+  }
+
+  if (!video) {
+    return res.status(404).json({ error: 'Video not found' });
+  }
+
+  if (process.env.ENABLE_AUTH !== 'true' && cdnManager.shouldUseCdn(req.originalUrl, 'video')) {
+    const cdnUrl = cdnManager.getCdnUrl(req.originalUrl, 'video');
+    if (cdnUrl) {
+      // Shorter than the signed-URL lifetime so a cached redirect never outlives its signature.
+      res.setHeader('Cache-Control', 'public, max-age=300');
+      return res.redirect(cdnUrl);
+    }
+  }
+
+  const absolutePath = path.resolve(video.path);
+  return sendMediaFile(req, res, path.dirname(absolutePath), path.basename(absolutePath), {
+    cacheControl: mediaCacheControl(3600),
+    notFoundMessage: 'Video file not found',
+    errorMessage: 'Failed to stream video'
+  });
 });
 
 module.exports = router;

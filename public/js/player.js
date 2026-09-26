@@ -1,473 +1,317 @@
-document.addEventListener('DOMContentLoaded', async () => {
-  // Load utility functions
-  const { showToast, addUtilStyles, getVODsName, isFavorite, toggleFavorite } = window.VideoUtils;
-  
-  // Add utility styles
-  addUtilStyles();
-  
-  // Get the dynamic VODs name and update page elements
-  const vodsName = await getVODsName();
-  document.getElementById('app-title').textContent = vodsName;
-  document.getElementById('footer-text').textContent = `© ${vodsName} - A simple VOD sharing system`;
-  const videoPlayer = document.getElementById('video-player');
-  const videoTitle = document.getElementById('video-title');
-  const videoDate = document.getElementById('video-date');
-  const videoDuration = document.getElementById('video-duration');
-  const favoriteBtn = document.getElementById('favorite-btn');
-  const favoriteText = favoriteBtn.querySelector('.favorite-text');
-  const videoContainer = document.querySelector('.video-container');
-  
-  // New share popover elements
-  const shareToggleBtn = document.getElementById('share-toggle-btn');
-  const sharePopover = document.getElementById('share-popover');
-  const copyBaseLinkBtn = document.getElementById('copy-base-link-btn');
-  const copyTimestampLinkBtn = document.getElementById('copy-timestamp-link-btn');
-  const popoverCurrentTime = document.getElementById('popover-current-time');
-  
-  let isLoading = false;
-  let plyrPlayer = null; // To hold the Plyr instance
-  let deathTimestamps = null; // To hold parsed timestamps
-  let baseShareUrl = null; // To store the base share URL fetched from API
-  
-  const videoId = getVideoIdFromPath(window.location.pathname);
-  
-  const loadingOverlay = document.createElement('div');
-  loadingOverlay.className = 'video-loading-overlay';
-  loadingOverlay.innerHTML = `
-    <div class="video-loading-spinner"></div>
-    <div class="video-loading-text">Loading video...</div>
-  `;
-  
-  loadVideo(videoId);
-  
-  // Add listeners for new elements (implementation later)
-  favoriteBtn.addEventListener('click', handleFavoriteClick);
-  shareToggleBtn.addEventListener('click', toggleSharePopover); 
-  copyBaseLinkBtn.addEventListener('click', handleCopyBaseLink);
-  copyTimestampLinkBtn.addEventListener('click', handleCopyTimestampLink);
-  // Add listener to close popover on outside click (implementation later)
-  document.addEventListener('click', handleClickOutsidePopover);
-  
-  /**
-   * Parse the video ID from a watch page path, relative to the document base
-   * @param {string} path - The current window location pathname
-   * @returns {string} - The video ID, or '' if not present
-   */
-  function getVideoIdFromPath(path) {
-    const basePath = appUrl('/');
-    let relativePath = path;
-    if (relativePath.startsWith(basePath)) {
-      relativePath = relativePath.slice(basePath.length);
-    }
-    relativePath = relativePath.replace(/^\/+/, '');
-    return relativePath.split('/').pop() || '';
+/**
+ * Player core shared by the index overlay and the standalone player page:
+ * lazy Plyr loading, player creation (options, death markers),
+ * favorite buttons and the share menu. Also boots player.html when present.
+ *
+ * Lives in player.js (not a new file) because this script is served before
+ * authentication, which share-link viewers need.
+ */
+(function () {
+  const { showToast, appUrl, formatClock, isFavorite, toggleFavorite } = window.VideoUtils;
+
+  // Vendored Plyr 3.7.8 (public/vendor/plyr), served before authentication so share-link viewers get it too.
+  const PLYR_RETRY_AFTER_MS = 30000;
+  let plyrPromise = null;
+  let plyrFailedAt = 0;
+
+  /** Insert plyr.css before the app stylesheet, so the app's Plyr overrides win at equal specificity. */
+  function ensurePlyrStylesheet() {
+    const href = appUrl('/vendor/plyr/plyr.css');
+    const absolute = new URL(href, document.baseURI).href;
+    if ([...document.querySelectorAll('link[rel="stylesheet"]')].some((link) => link.href === absolute)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.insertBefore(link, document.querySelector('link[rel="stylesheet"][href$="css/style.css"]'));
   }
 
   /**
-   * Load video details and set up player
+   * Load Plyr (JS + CSS) once. A failure is remembered for a short cooldown, so opening
+   * several videos does not retry the download each time; callers fall back to native controls.
+   * @returns {Promise<Function>} The Plyr constructor
    */
-  async function loadVideo(id) {
-    if (isLoading) return;
-    
-    try {
-      isLoading = true;
-      
-      // Fetch video metadata from API
-      const response = await fetch(appUrl(`/api/videos/${id}`));
-      
-      if (!response.ok) {
-        throw new Error('Failed to fetch video');
-      }
-      
-      const video = await response.json();
-      
-      document.title = `${vodsName} - ${video.title}`;
-      videoTitle.textContent = video.title;
-      
-      const addedDate = new Date(video.added_date);
-      videoDate.textContent = addedDate.toLocaleDateString();
-      
-      videoDuration.textContent = video.duration_formatted;
-      
-      // Parse death timestamps if they exist
-      if (video.death_timestamps) {
-        try {
-          deathTimestamps = JSON.parse(video.death_timestamps);
-          if (!Array.isArray(deathTimestamps)) {
-            console.warn('Parsed death_timestamps is not an array:', deathTimestamps);
-            deathTimestamps = null;
-          }
-        } catch (parseError) {
-          console.error('Error parsing death_timestamps JSON:', parseError);
-          deathTimestamps = null;
-        }
-      } else {
-        deathTimestamps = null; // Ensure it's null if not present
-      }
-      
-      updateFavoriteButtonState(id);
-      
-      videoPlayer.src = appUrl(`/api/videos/${id}/stream`);
-      
-      initializePlyrPlayer();
-    } catch (error) {
-      console.error('Error loading video:', error);
-      showToast('Failed to load video. Please try again.', 'error');
-    } finally {
-      isLoading = false;
+  function loadPlyr() {
+    if (typeof window.Plyr === 'function') {
+      ensurePlyrStylesheet();
+      return Promise.resolve(window.Plyr);
     }
-  }
-  
-  /**
-   * Initialize Plyr player
-   */
-  function initializePlyrPlayer() {
-    // Destroy existing player if it exists
-    if (plyrPlayer) {
-      try {
-        plyrPlayer.destroy();
-      } catch (e) {
-        console.warn('Error destroying previous Plyr instance:', e);
-      }
-      plyrPlayer = null;
+    if (plyrPromise && !(plyrFailedAt && Date.now() - plyrFailedAt > PLYR_RETRY_AFTER_MS)) {
+      return plyrPromise;
     }
-    
-    // Plyr options
-    const options = {
-      // Standard controls similar to YouTube
-      controls: [
-        'play-large', // The big play button in the center
-        'play',       // Play/pause playback
-        'progress',   // The progress bar and scrubber for playback and buffering
-        'current-time', // The current time of playback
-        'duration',   // The full duration of the media
-        'mute',       // Toggle mute
-        'volume',     // Volume control
-        'captions',   // Toggle captions
-        'settings',   // Settings menu
-        'pip',        // Picture-in-picture (supported browsers)
-        'airplay',    // Airplay (supported browsers)
-        'fullscreen'  // Toggle fullscreen
-      ],
-      settings: ['captions', 'quality', 'speed', 'loop'],
-      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
-      // Add other options as needed, e.g., keyboard shortcuts, tooltips
-      keyboard: { focused: true, global: true },
-      tooltips: { controls: true, seek: true },
-      autoplay: true, // Attempt to autoplay
-      // You might want to customize icons or i18n later
-    };
-    
-    plyrPlayer = new Plyr(videoPlayer, options);
-    const initialTimestamp = getTimestampFromUrl();
-    const seekToInitialTimestamp = initialTimestamp !== null
-      ? createDeferredTimestampSeek(plyrPlayer, videoPlayer, initialTimestamp, 'Player')
-      : null;
-
-    plyrPlayer.on('ready', event => {
-      console.log('Plyr player ready');
-      document.querySelector('.video-info').classList.add('fade-in');
-
-      if (seekToInitialTimestamp) {
-        seekToInitialTimestamp();
-      }
+    plyrFailedAt = 0;
+    ensurePlyrStylesheet();
+    plyrPromise = new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      const fail = (error) => {
+        script.remove();
+        plyrFailedAt = Date.now();
+        reject(error);
+      };
+      script.src = appUrl('/vendor/plyr/plyr.js');
+      script.async = true;
+      script.onload = () => (typeof window.Plyr === 'function'
+        ? resolve(window.Plyr)
+        : fail(new Error('Plyr missing after loading vendor/plyr/plyr.js')));
+      script.onerror = () => fail(new Error('Failed to load vendor/plyr/plyr.js'));
+      document.head.appendChild(script);
     });
-    
-    // Handle loadedmetadata to ensure duration is known before drawing markers
-    plyrPlayer.on('loadedmetadata', event => {
-      console.log('Plyr metadata loaded, duration:', plyrPlayer.duration);
-      if (deathTimestamps && plyrPlayer.duration) {
-        displayDeathMarkers(deathTimestamps, plyrPlayer.duration);
-      }
-    });
-    
-    plyrPlayer.on('error', event => {
-      console.error('Plyr playback error:', event.detail.plyr.source);
-      showToast('Error playing video. Please try again.', 'error');
-    });
+    return plyrPromise;
   }
 
   function getTimestampFromUrl() {
     const timestamp = new URLSearchParams(window.location.search).get('t');
     if (timestamp === null) return null;
-
     const seconds = Number(timestamp);
     if (!Number.isFinite(seconds) || seconds < 0) return null;
-
     return Math.floor(seconds);
   }
 
-  function createDeferredTimestampSeek(player, mediaElement, targetTime, label) {
-    const maxAttempts = 20;
-    const retryDelayMs = 250;
-    const seekEvents = ['loadedmetadata', 'durationchange', 'canplay', 'playing'];
-    let attempts = 0;
-    let retryTimer = null;
-    let completed = false;
-
-    const cleanup = () => {
-      seekEvents.forEach(eventName => {
-        mediaElement.removeEventListener(eventName, attemptSeek);
-      });
-      if (retryTimer) {
-        clearTimeout(retryTimer);
-        retryTimer = null;
-      }
-    };
-
-    const scheduleRetry = () => {
-      if (completed || attempts >= maxAttempts || retryTimer) return;
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        attemptSeek();
-      }, retryDelayMs);
-    };
-
-    function attemptSeek() {
-      if (completed) return;
-      attempts += 1;
-
-      try {
-        player.currentTime = targetTime;
-
-        const actualTime = Number(player.currentTime || mediaElement.currentTime || 0);
-        if (Math.abs(actualTime - targetTime) < 1) {
-          completed = true;
-          cleanup();
-          console.log(`${label} seeked to timestamp: ${targetTime}s`);
-          return;
-        }
-
-        if (attempts >= maxAttempts) {
-          completed = true;
-          cleanup();
-          console.warn(`${label} timestamp seek did not settle near ${targetTime}s`);
-          return;
-        }
-      } catch (seekError) {
-        if (attempts >= maxAttempts) {
-          completed = true;
-          cleanup();
-          console.error(`${label} timestamp seek failed:`, seekError);
-          return;
-        }
-      }
-
-      scheduleRetry();
+  /**
+   * @param {string|number[]|null|undefined} raw - JSON array of seconds from the API
+   * @returns {number[]}
+   */
+  function parseDeathTimestamps(raw) {
+    if (!raw) return [];
+    try {
+      const parsed = Array.isArray(raw) ? raw : JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((t) => Number.isFinite(t) && t >= 0) : [];
+    } catch (error) {
+      console.warn('Invalid death_timestamps:', error);
+      return [];
     }
+  }
 
-    seekEvents.forEach(eventName => {
-      mediaElement.addEventListener(eventName, attemptSeek);
+  /**
+   * Create a Plyr player on an element that has no src yet (set src afterwards,
+   * so Plyr's internal clone of the element does not start a second download).
+   * @param {HTMLVideoElement} videoElement
+   * @param {{deathTimestamps?: number[]}} options
+   * @returns {Object} Plyr instance
+   */
+  function createPlayer(videoElement, { deathTimestamps = [] } = {}) {
+    const seen = new Set();
+    const points = [];
+    deathTimestamps.forEach((seconds) => {
+      const time = Math.round(seconds);
+      if (seen.has(time)) return;
+      seen.add(time);
+      // Plyr renders labels as HTML; this one is built from digits only.
+      points.push({ time, label: `Death at ${formatClock(time)}` });
     });
 
-    return attemptSeek;
+    const player = new window.Plyr(videoElement, {
+      controls: [
+        'play-large', 'play', 'progress', 'current-time', 'duration', 'mute',
+        'volume', 'captions', 'settings', 'pip', 'airplay', 'fullscreen'
+      ],
+      settings: ['captions', 'quality', 'speed', 'loop'],
+      speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+      // Global keys: one player per page, and the overlay makes the page behind it inert.
+      keyboard: { focused: true, global: true },
+      tooltips: { controls: true, seek: true },
+      autoplay: true,
+      iconUrl: appUrl('/vendor/plyr/plyr.svg'),
+      blankVideo: appUrl('/vendor/plyr/blank.mp4'),
+      markers: { enabled: points.length > 0, points }
+    });
+
+    player.on('error', () => {
+      showToast('Error playing video. Please try again.', 'error');
+    });
+    return player;
   }
-  
+
   /**
-   * Update favorite button state based on whether the video is favorited
-   * @param {string} videoId - The ID of the video
+   * Reflect favorite state on a Favorite button (the label stays "Favorite"; aria-pressed carries the state)
+   * @param {HTMLButtonElement} button
+   * @param {string} videoId
    */
-  function updateFavoriteButtonState(videoId) {
-    const isFavorited = isFavorite(videoId);
-    
-    if (isFavorited) {
-      favoriteBtn.classList.add('active');
-      favoriteText.textContent = 'Remove from Favorites';
-    } else {
-      favoriteBtn.classList.remove('active');
-      favoriteText.textContent = 'Add to Favorites';
-    }
+  function renderFavoriteButton(button, videoId) {
+    const favorited = Boolean(videoId) && isFavorite(videoId);
+    button.classList.toggle('active', favorited);
+    button.setAttribute('aria-pressed', String(favorited));
   }
-  
+
   /**
-   * Handle favorite button click
+   * Wire a Favorite button
+   * @param {HTMLButtonElement} button
+   * @param {() => string|null} getVideoId
+   * @param {(videoId: string, favorited: boolean) => void} [onChange]
    */
-  function handleFavoriteClick() {
-    const isNowFavorited = toggleFavorite(videoId);
-    
-    updateFavoriteButtonState(videoId);
-    
-    if (isNowFavorited) {
-      showToast('Added to favorites', 'info');
-    } else {
-      showToast('Removed from favorites', 'info');
-    }
+  function bindFavoriteButton(button, getVideoId, onChange) {
+    button.addEventListener('click', () => {
+      const videoId = getVideoId();
+      if (!videoId) return;
+      const favorited = toggleFavorite(videoId);
+      renderFavoriteButton(button, videoId);
+      showToast(favorited ? 'Added to favorites' : 'Removed from favorites');
+      if (onChange) onChange(videoId, favorited);
+    });
   }
-  
-  /**
-   * Toggles the visibility of the share popover.
-   */
-  function toggleSharePopover() {
-    const isVisible = sharePopover.classList.toggle('visible');
-    if (isVisible && plyrPlayer) {
-      // Update time display when opening
-      const currentTime = Math.round(plyrPlayer.currentTime);
-      popoverCurrentTime.textContent = `Current time: ${formatTime(currentTime)}`;
-    }
-  }
-  
-  /**
-   * Closes the popover if a click occurs outside of it.
-   * @param {Event} event - The click event.
-   */
-  function handleClickOutsidePopover(event) {
-    if (sharePopover.classList.contains('visible') && 
-        !sharePopover.contains(event.target) && 
-        !shareToggleBtn.contains(event.target)) {
-      sharePopover.classList.remove('visible');
-    }
-  }
-  
-  /**
-   * Copies the base share link (without timestamp) to the clipboard.
-   */
-  async function handleCopyBaseLink() {
-    if (!baseShareUrl) {
-      // Fetch the base URL if it hasn't been fetched yet
-      await fetchBaseShareUrl(); 
-      if (!baseShareUrl) { // Check again after fetch attempt
-        showToast('Could not get share link.', 'error');
-        return;
-      }
-    }
-    
-    copyToClipboard(baseShareUrl, copyBaseLinkBtn);
-    sharePopover.classList.remove('visible'); // Close popover after copy
-  }
-  
-  /**
-   * Copies the share link with the current timestamp to the clipboard.
-   */
-  async function handleCopyTimestampLink() {
-    if (!plyrPlayer || typeof plyrPlayer.currentTime === 'undefined') {
-      showToast('Player not ready.', 'error');
+
+  function copyToClipboard(text, button) {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      // Insecure origins (plain-http LAN) have no async clipboard API.
+      window.prompt('Copy this link:', text);
       return;
     }
-    
-    if (!baseShareUrl) {
-      // Fetch the base URL if it hasn't been fetched yet
-      await fetchBaseShareUrl();
-      if (!baseShareUrl) { // Check again after fetch attempt
-        showToast('Could not get share link.', 'error');
-        return;
-      }
-    }
-    
-    const currentTime = Math.round(plyrPlayer.currentTime);
-    const timestampedUrl = `${baseShareUrl}?t=${currentTime}`;
-    
-    copyToClipboard(timestampedUrl, copyTimestampLinkBtn);
-    sharePopover.classList.remove('visible'); // Close popover after copy
-  }
-  
-  /**
-   * Helper function to copy text to clipboard and provide feedback.
-   * @param {string} text - The text to copy.
-   * @param {HTMLElement} buttonElement - The button that was clicked.
-   */
-  function copyToClipboard(text, buttonElement) {
     navigator.clipboard.writeText(text).then(() => {
-      const originalText = buttonElement.textContent;
-      buttonElement.textContent = 'Copied!';
-      buttonElement.disabled = true; // Briefly disable
+      const originalText = button.textContent;
+      button.textContent = 'Copied!';
+      button.disabled = true;
       showToast('Link copied to clipboard!', 'success');
       setTimeout(() => {
-        buttonElement.textContent = originalText;
-        buttonElement.disabled = false;
+        button.textContent = originalText;
+        button.disabled = false;
       }, 2000);
-    }).catch(err => {
-      console.error('Failed to copy text: ', err);
+    }).catch((error) => {
+      console.error('Failed to copy text:', error);
       showToast('Failed to copy link.', 'error');
     });
   }
-  
-  /**
-   * Fetches the base share URL from the API.
-   */
-  async function fetchBaseShareUrl() {
-    if (baseShareUrl) return; // Already fetched
-    
-    try {
-      const response = await fetch(appUrl(`/api/share/${videoId}`));
-      if (!response.ok) {
-        throw new Error('Failed to generate share link');
-      }
-      const data = await response.json();
-      baseShareUrl = data.shareLink; // Store the base URL
-    } catch (error) {
-      console.error('Error generating share link:', error);
-      baseShareUrl = null; // Ensure it's null on error
-    }
-  }
 
   /**
-   * Displays markers on the video timeline for each death timestamp.
-   * @param {number[]} timestamps - Array of death timestamps in seconds.
-   * @param {number} duration - Total video duration in seconds.
+   * Wire a share popover (Copy Link / Copy Link at Current Time)
+   * @param {Object} elements - { toggle, popover, copyBase, copyTimestamp, timeDisplay }
+   * @param {() => string|null} getVideoId
+   * @param {() => Object|null} getPlayer
+   * @returns {{close: Function}}
    */
-  function displayDeathMarkers(timestamps, duration) {
-    if (!duration || duration <= 0 || !timestamps || timestamps.length === 0) {
-      console.log('No valid timestamps or duration to display markers.');
-      return;
-    }
-    
-    // Find the actual progress input element within the container
-    // This is usually the element that visually represents the seekable track
-    const progressTrack = videoContainer.querySelector('.plyr__progress input[type=range]'); 
-    let progressElement; // Declare progressElement here
-    if (!progressTrack) {
-      console.error('Could not find Plyr progress track element to add markers.');
-      // Fallback to container if track not found, though positioning might be less precise
-      const progressContainer = videoContainer.querySelector('.plyr__progress__container');
-      if (!progressContainer) {
-        console.error('Could not find Plyr progress container either.');
-        return;
+  function bindShareMenu(elements, getVideoId, getPlayer) {
+    const { toggle, popover, copyBase, copyTimestamp, timeDisplay } = elements;
+    const shareUrls = new Map();
+
+    const setOpen = (open) => {
+      popover.classList.toggle('visible', open);
+      toggle.setAttribute('aria-expanded', String(open));
+      const player = getPlayer();
+      if (open && player) {
+        timeDisplay.textContent = `Current time: ${formatClock(Math.round(player.currentTime || 0))}`;
       }
-      console.warn('Using progress container as fallback for markers.');
-      progressElement = progressContainer; 
-    } else {
-      // We need to append markers to the *parent* of the input range for correct positioning relative to it.
-      progressElement = progressTrack.parentElement; 
+    };
+    const close = () => setOpen(false);
+
+    async function getShareUrl(videoId) {
+      if (shareUrls.has(videoId)) return shareUrls.get(videoId);
+      try {
+        const response = await fetch(appUrl(`/api/share/${videoId}`));
+        if (!response.ok) throw new Error(`Share link request failed (${response.status})`);
+        const data = await response.json();
+        shareUrls.set(videoId, data.shareLink);
+        return data.shareLink;
+      } catch (error) {
+        console.error('Error generating share link:', error);
+        return null;
+      }
     }
 
-    if (!progressElement) {
-        console.error('Could not determine element to append markers to.');
+    async function copyLink(button, withTimestamp) {
+      const videoId = getVideoId();
+      const player = getPlayer();
+      if (!videoId) return;
+      if (withTimestamp && (!player || typeof player.currentTime === 'undefined')) {
+        showToast('Player not ready.', 'error');
         return;
+      }
+      const baseUrl = await getShareUrl(videoId);
+      if (!baseUrl) {
+        showToast('Could not get share link.', 'error');
+        return;
+      }
+      copyToClipboard(withTimestamp ? `${baseUrl}?t=${Math.round(player.currentTime)}` : baseUrl, button);
+      close();
     }
-    
-    // Clear existing markers first from the chosen parent
-    const existingMarkers = progressElement.querySelectorAll('.death-marker');
-    existingMarkers.forEach(marker => marker.remove());
-    
-    console.log(`Displaying ${timestamps.length} death markers.`);
-    
-    timestamps.forEach(timestamp => {
-      if (timestamp >= 0 && timestamp <= duration) {
-        const percentage = (timestamp / duration) * 100;
-        
-        const marker = document.createElement('div');
-        marker.className = 'death-marker';
-        marker.style.left = `${percentage}%`;
-        // Optional: Add tooltip with timestamp or player name later
-        marker.title = `Death at ${formatTime(timestamp)}`; 
-        
-        progressElement.appendChild(marker); // Append to the correct parent
-      } else {
-        console.warn(`Skipping invalid timestamp: ${timestamp} (duration: ${duration})`);
+
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.addEventListener('click', () => setOpen(!popover.classList.contains('visible')));
+    copyBase.addEventListener('click', () => copyLink(copyBase, false));
+    copyTimestamp.addEventListener('click', () => copyLink(copyTimestamp, true));
+    document.addEventListener('click', (event) => {
+      if (popover.classList.contains('visible') && !popover.contains(event.target) && !toggle.contains(event.target)) {
+        close();
       }
     });
+    return { close };
   }
-  
-  /**
-   * Formats seconds into MM:SS or HH:MM:SS format.
-   * @param {number} seconds - The time in seconds.
-   * @returns {string} The formatted time string.
-   */
-  function formatTime(seconds) {
-    const date = new Date(0);
-    date.setSeconds(seconds); 
-    const timeString = date.toISOString().substr(11, 8);
-    // Remove leading hours if zero (e.g., 00:15:30 -> 15:30)
-    return timeString.startsWith('00:') ? timeString.substr(3) : timeString;
+
+  /** @returns {string|null} The id in a /watch/:id path (under any base path) */
+  function videoIdFromPath(pathname = window.location.pathname) {
+    const match = pathname.match(/\/watch\/(\d+)\/?$/);
+    return match ? match[1] : null;
   }
-});
+
+  window.PlayerCore = {
+    videoIdFromPath,
+    loadPlyr,
+    createPlayer,
+    parseDeathTimestamps,
+    renderFavoriteButton,
+    bindFavoriteButton,
+    bindShareMenu
+  };
+
+  // --- Standalone player page (player.html) ---
+  async function bootPlayerPage(videoElement) {
+    const $ = (id) => document.getElementById(id);
+    const videoId = videoIdFromPath();
+    let player = null;
+
+    const favoriteBtn = $('favorite-btn');
+    bindFavoriteButton(favoriteBtn, () => videoId);
+    renderFavoriteButton(favoriteBtn, videoId);
+    bindShareMenu({
+      toggle: $('share-toggle-btn'),
+      popover: $('share-popover'),
+      copyBase: $('copy-base-link-btn'),
+      copyTimestamp: $('copy-timestamp-link-btn'),
+      timeDisplay: $('popover-current-time')
+    }, () => videoId, () => player);
+
+    // Config, metadata and Plyr load in parallel; only the metadata gates playback.
+    const namePromise = window.VideoUtils.getAppConfig().then((config) => config.vodsName);
+    namePromise.then((name) => {
+      $('app-title').textContent = name;
+      $('footer-text').textContent = `© ${name} - A simple VOD sharing system`;
+    });
+
+    try {
+      if (!videoId) throw new Error('No video id in URL');
+      const videoPromise = fetch(appUrl(`/api/videos/${videoId}`)).then((response) => {
+        if (!response.ok) throw new Error(`Failed to fetch video (${response.status})`);
+        return response.json();
+      });
+      // Without Plyr (load failed) the native controls still play the video.
+      const [video, plyrAvailable] = await Promise.all([videoPromise, loadPlyr().then(() => true, () => false)]);
+
+      $('video-title').textContent = video.title;
+      $('video-date').textContent = new Date(video.added_date).toLocaleDateString();
+      $('video-duration').textContent = window.VideoUtils.formatVideoDuration(video);
+      namePromise.then((name) => {
+        document.title = `${name} - ${video.title}`;
+      });
+
+      if (plyrAvailable) {
+        player = createPlayer(videoElement, {
+          deathTimestamps: parseDeathTimestamps(video.death_timestamps)
+        });
+        player.on('ready', () => document.querySelector('.video-info').classList.add('fade-in'));
+      }
+      // ?t= (share links): one seek once the duration is known; works with or without Plyr.
+      const startAt = getTimestampFromUrl();
+      if (startAt !== null) {
+        videoElement.addEventListener('loadedmetadata', () => {
+          videoElement.currentTime = startAt;
+        }, { once: true });
+      }
+      videoElement.src = appUrl(`/api/videos/${videoId}/stream`);
+    } catch (error) {
+      console.error('Error loading video:', error);
+      showToast('Failed to load video. Please try again.', 'error');
+    }
+  }
+
+  const standaloneVideo = document.getElementById('video-player');
+  if (standaloneVideo) {
+    bootPlayerPage(standaloneVideo);
+  }
+}());

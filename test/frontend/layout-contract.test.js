@@ -20,14 +20,6 @@ describe('Frontend layout contract', () => {
     expect(favicons).toHaveLength(1);
   });
 
-  test('index does not load the unused GSAP bundle', () => {
-    const document = loadDom('public/index.html');
-    const scripts = Array.from(document.querySelectorAll('script[src]'))
-      .map(script => script.getAttribute('src'));
-
-    expect(scripts.some(src => src && src.toLowerCase().includes('gsap'))).toBe(false);
-  });
-
   test('index page contains required root UI hooks', () => {
     const document = loadDom('public/index.html');
 
@@ -46,18 +38,68 @@ describe('Frontend layout contract', () => {
     expect(scanStatus.getAttribute('aria-live')).toBe('polite');
   });
 
-  test('player page shares global typography includes', () => {
-    const document = loadDom('public/player.html');
-    const fontStylesheets = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
-      .map(link => link.getAttribute('href'));
-
-    expect(fontStylesheets.some(href => href && href.includes('fonts.googleapis.com'))).toBe(true);
+  test('fonts are self-hosted: every @font-face source and font preload exists locally', () => {
+    const css = fs.readFileSync(path.resolve(__dirname, '..', '..', 'public/css/style.css'), 'utf8');
+    const fontSources = [...css.matchAll(/url\((?:'|")?\.\.\/(fonts\/[^'")]+)/g)].map((match) => match[1]);
+    expect(fontSources.length).toBeGreaterThanOrEqual(2);
+    ['public/index.html', 'public/player.html', 'public/login.html'].forEach((page) => {
+      const preloads = Array.from(loadDom(page).querySelectorAll('link[rel="preload"][as="font"]'))
+        .map((link) => link.getAttribute('href'));
+      expect(preloads.length).toBeGreaterThan(0);
+      fontSources.concat(preloads).forEach((file) => {
+        expect(fs.existsSync(path.resolve(__dirname, '..', '..', 'public', file))).toBe(true);
+      });
+    });
   });
 
-  test('login page avoids page-scoped inline style blocks', () => {
-    const document = loadDom('public/login.html');
-    const inlineStyles = document.querySelectorAll('style');
+  test('player page loads plyr.css before the app stylesheet (so app overrides win)', () => {
+    const stylesheets = Array.from(loadDom('public/player.html').querySelectorAll('link[rel="stylesheet"]'))
+      .map((link) => link.getAttribute('href'));
+    expect(stylesheets.indexOf('vendor/plyr/plyr.css')).toBeGreaterThanOrEqual(0);
+    expect(stylesheets.indexOf('vendor/plyr/plyr.css')).toBeLessThan(stylesheets.indexOf('css/style.css'));
+  });
 
-    expect(inlineStyles).toHaveLength(0);
+  test.each(['public/index.html', 'public/player.html', 'public/login.html'])(
+    '%s is ready for a strict CSP (no inline scripts, handlers, styles or third-party resources)',
+    (page) => {
+      const document = loadDom(page);
+      const scripts = Array.from(document.querySelectorAll('script'));
+
+      expect(scripts.filter((script) => !script.getAttribute('src'))).toHaveLength(0);
+      scripts.forEach((script) => {
+        expect(script.hasAttribute('defer')).toBe(true);
+        expect(script.getAttribute('src')).toMatch(/^js\//);
+      });
+      expect(document.querySelectorAll('style, [style]')).toHaveLength(0);
+      const handlerAttributes = Array.from(document.querySelectorAll('*'))
+        .flatMap((element) => element.getAttributeNames().filter((name) => name.startsWith('on')));
+      expect(handlerAttributes).toEqual([]);
+      const references = Array.from(document.querySelectorAll('link[href], script[src], img[src]'))
+        .map((element) => element.getAttribute('href') || element.getAttribute('src'));
+      expect(references.filter((ref) => /^(https?:)?\/\//i.test(ref))).toEqual([]);
+    }
+  );
+
+  test('Plyr is vendored locally with its license', () => {
+    const vendorDir = path.resolve(__dirname, '..', '..', 'public/vendor/plyr');
+    ['plyr.js', 'plyr.css', 'plyr.svg', 'blank.mp4', 'LICENSE.md'].forEach((file) => {
+      expect(fs.existsSync(path.join(vendorDir, file))).toBe(true);
+    });
+  });
+
+  test('no frontend source references a third-party origin', () => {
+    const sources = ['public/js/main.js', 'public/js/player.js', 'public/js/utils.js', 'public/js/video-preview.js', 'public/js/login.js', 'public/css/style.css'];
+    sources.forEach((file) => {
+      const text = fs.readFileSync(path.resolve(__dirname, '..', '..', file), 'utf8');
+      expect(text).not.toMatch(/cdn\.plyr\.io|fonts\.googleapis|fonts\.gstatic/);
+    });
+  });
+
+  test('index page does not block on Plyr', () => {
+    const document = loadDom('public/index.html');
+    const references = Array.from(document.querySelectorAll('script[src], link[href]'))
+      .map((element) => element.getAttribute('src') || element.getAttribute('href'));
+
+    expect(references.some((ref) => ref.includes('plyr'))).toBe(false);
   });
 });

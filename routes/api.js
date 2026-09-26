@@ -1,34 +1,17 @@
 const express = require('express');
-const router = express.Router();
-// Import scanLibrary and getScanStatus
 const { scanLibrary, getScanStatus } = require('../lib/scanner');
-// Import getVideosPaginated instead of getAllVideos
 const { getVideosPaginated, getVideoById, getVideosWithMetadata, getVideosByIds } = require('../db/database');
 const OpenRouterClient = require('../lib/llm');
 const { toVideoCard, toVideoDetail } = require('../lib/client-video');
 const { issueShareToken } = require('../lib/security-tokens');
 const { parsePublicBaseUrl } = require('../lib/url-config');
+const { parseCanonicalInt } = require('../lib/parse');
 
-// Canonical positive safe-integer string: no sign, no leading zeros, no decimals.
-const POSITIVE_INT_RE = /^[1-9]\d*$/;
+const router = express.Router();
 const DEFAULT_PAGE = 1;
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
 const MAX_SEARCH_LENGTH = 500;
-
-/**
- * Parse a canonical positive safe-integer string. Returns null when the raw
- * value is not a string or not canonical (e.g. '0', '01', '-1', '1.5', '1e2').
- * @param {*} raw - Query or path parameter value
- * @returns {number|null} Parsed value, or null when invalid
- */
-function parsePositiveIntParam(raw) {
-  if (typeof raw !== 'string' || !POSITIVE_INT_RE.test(raw)) {
-    return null;
-  }
-  const value = Number(raw);
-  return Number.isSafeInteger(value) ? value : null;
-}
 
 router.get('/videos', async (req, res) => {
   try {
@@ -45,24 +28,20 @@ router.get('/videos', async (req, res) => {
     let page = DEFAULT_PAGE;
     let limit = DEFAULT_LIMIT;
     if (req.query.page !== undefined) {
-      page = parsePositiveIntParam(req.query.page);
+      page = parseCanonicalInt(req.query.page);
       if (page === null) {
         return res.status(400).json({ error: 'Page must be a canonical positive integer' });
       }
     }
     if (req.query.limit !== undefined) {
-      limit = parsePositiveIntParam(req.query.limit);
+      limit = parseCanonicalInt(req.query.limit);
       if (limit === null || limit > MAX_LIMIT) {
         return res.status(400).json({ error: 'Limit must be a canonical positive integer of at most 100' });
       }
     }
 
-    const sort = req.query.sort || 'date_added_desc'; // Default sort
-
-    // Fetch paginated videos and total count
-    const { videos, totalCount } = await getVideosPaginated(db, page, limit, searchQuery, sort); // Pass sort parameter
-
-    // Return mapped cards and total count for pagination controls
+    const sort = req.query.sort || 'date_added_desc';
+    const { videos, totalCount } = await getVideosPaginated(db, page, limit, searchQuery, sort);
     res.json({
       videos: videos.map(toVideoCard),
       totalCount: totalCount,
@@ -75,7 +54,73 @@ router.get('/videos', async (req, res) => {
   }
 });
 
-// Advanced search endpoint using LLM
+// Matched ids per normalized query, so paging through one search (infinite
+// scroll) costs one LLM call. Bounded and short-lived: a rescan can change the
+// library, and entries are evicted oldest-first. The in-flight promise is
+// cached too, so concurrent page requests share one call. Failures and "no
+// metadata yet" (null) are not kept.
+const SEARCH_CACHE_MAX_ENTRIES = 50;
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
+const searchCache = new Map();
+
+function normalizeSearchQuery(query) {
+  return query.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+// Treat model output as untrusted: keep canonical positive ids, first
+// occurrence only, in the model's result order.
+function toMatchedIds(matchedVideos) {
+  const matchedIds = [];
+  const seenIds = new Set();
+  for (const matchedVideo of matchedVideos) {
+    const rawId = matchedVideo && matchedVideo.id;
+    const id = Number.isSafeInteger(rawId) && rawId > 0
+      ? rawId
+      : parseCanonicalInt(rawId);
+    if (id !== null && !seenIds.has(id)) {
+      seenIds.add(id);
+      matchedIds.push(id);
+    }
+  }
+  return matchedIds;
+}
+
+function cachedSearch(query, search) {
+  const key = normalizeSearchQuery(query);
+  const now = Date.now();
+  const cached = searchCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+
+  searchCache.delete(key);
+  for (const [staleKey, entry] of searchCache) {
+    if (searchCache.size < SEARCH_CACHE_MAX_ENTRIES && entry.expiresAt > now) {
+      break;
+    }
+    searchCache.delete(staleKey);
+  }
+
+  const entry = { result: null, expiresAt: now + SEARCH_CACHE_TTL_MS };
+  const forget = () => {
+    if (searchCache.get(key) === entry) {
+      searchCache.delete(key);
+    }
+  };
+  entry.result = search().then((result) => {
+    if (result === null) {
+      forget();
+    }
+    return result;
+  }, (error) => {
+    forget();
+    throw error;
+  });
+  searchCache.set(key, entry);
+  return entry.result;
+}
+
+// LLM search over sidecar metadata.
 router.post('/videos/advanced-search', async (req, res) => {
   try {
     const body = req.body || {};
@@ -94,26 +139,27 @@ router.post('/videos/advanced-search', async (req, res) => {
       return res.status(400).json({ error: 'Limit must be a positive safe integer of at most 100' });
     }
 
-    // Check if advanced search is enabled
-    const advancedSearchEnabled = process.env.ADVANCED_SEARCH_ENABLED === 'true';
-    if (!advancedSearchEnabled) {
+    if (process.env.ADVANCED_SEARCH_ENABLED !== 'true') {
       return res.status(400).json({ error: 'Advanced search is not enabled' });
     }
 
     const db = req.app.locals.db;
     const llmClient = new OpenRouterClient();
-
-    // Check if LLM is available
     if (!llmClient.isAvailable()) {
       return res.status(503).json({
         error: 'Advanced search temporarily unavailable - OpenRouter API key not configured'
       });
     }
 
-    // Get all videos with metadata
-    const videosWithMetadata = await getVideosWithMetadata(db);
+    const matchedIds = await cachedSearch(query, async () => {
+      const videosWithMetadata = await getVideosWithMetadata(db);
+      if (videosWithMetadata.length === 0) {
+        return null;
+      }
+      return toMatchedIds(await llmClient.searchVideos(query, videosWithMetadata));
+    });
 
-    if (videosWithMetadata.length === 0) {
+    if (matchedIds === null) {
       return res.json({
         videos: [],
         totalCount: 0,
@@ -121,23 +167,6 @@ router.post('/videos/advanced-search', async (req, res) => {
         limit: limit,
         message: 'No videos with metadata available for advanced search'
       });
-    }
-
-    // Use LLM to search
-    const matchedVideos = await llmClient.searchVideos(query, videosWithMetadata);
-
-    // Treat model output as untrusted and preserve its stable result order.
-    const matchedIds = [];
-    const seenIds = new Set();
-    for (const matchedVideo of matchedVideos) {
-      const rawId = matchedVideo && matchedVideo.id;
-      const id = Number.isSafeInteger(rawId) && rawId > 0
-        ? rawId
-        : parsePositiveIntParam(rawId);
-      if (id !== null && !seenIds.has(id)) {
-        seenIds.add(id);
-        matchedIds.push(id);
-      }
     }
 
     const totalCount = matchedIds.length;
@@ -161,8 +190,6 @@ router.post('/videos/advanced-search', async (req, res) => {
 
   } catch (error) {
     console.error('Advanced search error:', error);
-
-    // Check if it's an LLM-specific error and provide fallback
     if (error.message.includes('API') || error.message.includes('OpenRouter')) {
       res.status(503).json({
         error: 'Advanced search temporarily unavailable. Please try regular search.',
@@ -176,7 +203,7 @@ router.post('/videos/advanced-search', async (req, res) => {
 
 router.get('/videos/:id', async (req, res) => {
   try {
-    const videoId = parsePositiveIntParam(req.params.id);
+    const videoId = parseCanonicalInt(req.params.id);
     if (videoId === null) {
       return res.status(400).json({ error: 'Invalid video id' });
     }
@@ -198,7 +225,7 @@ router.get('/videos/:id', async (req, res) => {
 router.get('/share/:id', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
   try {
-    const videoId = parsePositiveIntParam(req.params.id);
+    const videoId = parseCanonicalInt(req.params.id);
     if (videoId === null) {
       return res.status(400).json({ error: 'Invalid video id' });
     }
@@ -237,36 +264,18 @@ router.get('/share/:id', async (req, res) => {
   }
 });
 
-
-
-router.post('/refresh', (req, res) => { // Changed to POST as it initiates an action
-  try {
-    const db = req.app.locals.db;
-
-    // Trigger scan asynchronously (don't await)
-    scanLibrary(db).catch(err => {
-      // Log error if scan fails unexpectedly after starting
-      console.error('Background scan failed:', err);
-    });
-
-    // Immediately respond that the scan has been initiated
-    res.status(202).json({ message: 'Library scan initiated' });
-  } catch (error) {
-    // Catch synchronous errors during initiation
-    console.error('Error initiating library scan:', error);
-    res.status(500).json({ error: 'Failed to initiate library scan' });
-  }
+// Starts a scan in the background and answers immediately.
+router.post('/refresh', (req, res) => {
+  scanLibrary(req.app.locals.db).catch((error) => {
+    console.error('Background scan failed:', error);
+  });
+  res.status(202).json({ message: 'Library scan initiated' });
 });
 
-// New endpoint to get scan status
-router.get('/scan/status', (req, res) => {
-  try {
-    const status = getScanStatus();
-    res.json(status);
-  } catch (error) {
-    console.error('Error fetching scan status:', error);
-    res.status(500).json({ error: 'Failed to fetch scan status' });
-  }
+router.get('/scan/status', (_req, res) => {
+  res.json(getScanStatus());
 });
+
+router.clearSearchCache = () => searchCache.clear();
 
 module.exports = router;
