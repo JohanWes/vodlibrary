@@ -162,12 +162,8 @@ describe('server security boundary', () => {
   });
 
   test.each([
-    ['/css/style.css', null, 'public, max-age=3600'],
-    ['/js/utils.js', null, 'public, max-age=3600'],
-    ['/js/player.js', null, 'public, max-age=3600'],
-    ['/favicon.ico', null, 'public, max-age=3600'],
+    ['/assets/blank.mp4', null, 'public, max-age=31536000, immutable'],
     ['/js/main.js', 'session', 'private, max-age=3600'],
-    ['/js/video-preview.js', 'session', 'private, max-age=3600'],
     ['/login.html', null, 'no-cache'],
     ['/', 'session', 'no-cache'],
     ['/index.html', 'session', 'no-cache'],
@@ -238,10 +234,9 @@ describe('server security boundary', () => {
 
     test('under BASE_PATH the pre-auth shell and share start times keep the prefix', async () => {
       const prefixed = loadApp({ BASE_PATH: '/vod' });
-      await request(prefixed).get('/vod/vendor/plyr/plyr.js').expect(200);
-      await request(prefixed).get('/vod/js/utils.js').expect(200);
+      await request(prefixed).get('/vod/assets/blank.mp4').expect(200);
       await request(prefixed).get('/vod/js/main.js').expect(302).expect('Location', '/vod/login.html');
-      await request(prefixed).get('/vendor/plyr/plyr.js').expect(302).expect('Location', '/vod/login.html');
+      await request(prefixed).get('/assets/blank.mp4').expect(302).expect('Location', '/vod/login.html');
 
       const token = issueShareToken(1, process.env.SHARE_TOKEN_SECRET);
       await request(prefixed).get(`/vod/s/${token}?t=12.5`).expect(303).expect('Location', '/vod/watch/1?t=12.5');

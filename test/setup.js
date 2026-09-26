@@ -12,6 +12,7 @@ process.env.SHARE_TOKEN_SECRET = 'test-share-signing-secret';
 process.env.SHARE_BASE_URL = 'https://example.test';
 process.env.ENABLE_AUTH = 'true';
 process.env.CDN_ENABLED = 'false';
+process.env.WEB_DIST_DIR = require('path').join(__dirname, '..', 'web'); // page templates from source, no build needed
 
 // Suppress console logs during tests unless DEBUG is set
 if (!process.env.DEBUG) {

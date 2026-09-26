@@ -40,7 +40,7 @@ router.get('/videos', async (req, res) => {
       }
     }
 
-    const sort = req.query.sort || 'date_added_desc';
+    const sort = req.query.sort || 'recorded_desc';
     const { videos, totalCount } = await getVideosPaginated(db, page, limit, searchQuery, sort);
     res.json({
       videos: videos.map(toVideoCard),

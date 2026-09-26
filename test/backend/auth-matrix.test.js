@@ -53,29 +53,8 @@ const CREDENTIALS = {
 };
 
 // App-shell files served before checkAuth (login page and share viewers need
-// them). Optional files (login.js, self-hosted fonts) are covered once present.
-const publicDir = path.join(__dirname, '..', '..', 'public');
-function firstPublicFile(dir, extension) {
-  try {
-    const name = fs.readdirSync(path.join(publicDir, dir)).sort()
-      .find((entry) => entry.endsWith(extension) && fs.statSync(path.join(publicDir, dir, entry)).isFile());
-    return name && `/${dir}/${name}`;
-  } catch (_error) {
-    return undefined;
-  }
-}
-const PRE_AUTH_ASSETS = [
-  '/css/style.css',
-  '/js/utils.js',
-  '/js/player.js',
-  '/favicon.ico',
-  '/vendor/plyr/plyr.js',
-  '/vendor/plyr/plyr.css',
-  '/vendor/plyr/plyr.svg',
-  '/vendor/plyr/blank.mp4',
-  fs.existsSync(path.join(publicDir, 'js', 'login.js')) ? '/js/login.js' : undefined,
-  firstPublicFile('fonts', '.woff2')
-].filter(Boolean);
+// them): the build's assets/ directory. Tests serve the web/ sources.
+const PRE_AUTH_ASSETS = ['/assets/blank.mp4'];
 
 // kind: 'page' denies with a redirect to the login page, 'api' with 401.
 // share: reachable with a share cookie for video 1 (GET/HEAD only);
@@ -83,7 +62,7 @@ const PRE_AUTH_ASSETS = [
 // public: reachable with any credential or none.
 const ROUTES = [
   ...PRE_AUTH_ASSETS.map((assetPath) => ({ method: 'GET', path: assetPath, kind: 'page', ok: 200, public: true })),
-  { method: 'HEAD', path: '/vendor/plyr/plyr.js', kind: 'page', ok: 200, public: true },
+  { method: 'HEAD', path: '/assets/blank.mp4', kind: 'page', ok: 200, public: true },
   { method: 'GET', path: '/', kind: 'page', ok: 200 },
   { method: 'GET', path: '/index.html', kind: 'page', ok: 200 },
   { method: 'GET', path: '/js/main.js', kind: 'page', ok: 200 },
@@ -195,35 +174,25 @@ describe('auth matrix', () => {
 });
 
 describe('pre-auth app shell', () => {
-  test.each([
-    ['/css/style.css', /^text\/css/],
-    ['/js/utils.js', /javascript/],
-    ['/vendor/plyr/plyr.css', /^text\/css/],
-    ['/vendor/plyr/plyr.js', /javascript/],
-    ['/vendor/plyr/plyr.svg', /^image\/svg\+xml/],
-    ['/vendor/plyr/blank.mp4', /^video\/mp4/]
-  ])('%s is served to anonymous viewers as the real file', async (urlPath, type) => {
-    const response = await probe('GET', urlPath, '');
+  test('assets are served to anonymous viewers as the real file', async () => {
+    const response = await probe('GET', '/assets/blank.mp4', '');
     expect(response.status).toBe(200);
-    expect(response.headers['content-type']).toMatch(type);
-    expect(response.headers['cache-control']).toBe('public, max-age=3600');
+    expect(response.headers['content-type']).toMatch(/^video\/mp4/);
+    expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
   });
 
   test.each([
-    '/vendor/../js/main.js',
-    '/vendor/%2e%2e/js/main.js',
-    '/fonts/..%2fjs/main.js',
-    '/vendor/plyr/../../js/video-preview.js',
-    '/js/../js/main.js',
-    '/css/style.css/../../js/main.js',
-    '/vendor/%2e%2e/index.html'
+    '/assets/../js/main.js',
+    '/assets/%2e%2e/js/main.js',
+    '/assets/..%2fjs/main.js',
+    '/assets/%2e%2e/index.html'
   ])('%s cannot reach private files without credentials', async (urlPath) => {
     const response = await probe('GET', urlPath, '');
     expect(response.status).not.toBe(200);
   });
 
   test('a missing pre-auth path falls through to the auth check', async () => {
-    const response = await probe('GET', '/fonts/does-not-exist.woff2', '');
+    const response = await probe('GET', '/assets/does-not-exist.js', '');
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe('/login.html');
   });

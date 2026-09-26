@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="/">
+  <meta name="description" content="A simple VOD sharing system">
+  <meta name="color-scheme" content="dark">
+  <title>Loading...</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
+  <script type="module" src="js/main.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="." class="wordmark" id="app-title">&nbsp;</a>
+    <div class="search-container">
+      <input type="search" id="search-input" placeholder="Search" class="search-input" aria-label="Search videos" autocomplete="off">
+      <label class="text-toggle">
+        <input type="checkbox" id="advanced-search-toggle">
+        <span>Advanced</span>
+      </label>
+      <button type="button" id="search-button" class="text-btn" hidden>Search</button>
+    </div>
+    <div class="header-actions">
+      <span id="scan-status" class="scan-status" aria-live="polite" hidden></span>
+      <button type="button" id="refresh-btn" class="text-btn">Rescan</button>
+    </div>
+  </header>
+
+  <main class="library">
+    <div class="library-controls">
+      <label class="text-toggle">
+        <input type="checkbox" id="favorites-toggle">
+        <span>Favorites only</span>
+      </label>
+      <label class="sort-control">
+        <span>Sort</span>
+        <select id="sort-select">
+          <option value="recorded_desc">Newest</option>
+          <option value="recorded_asc">Oldest</option>
+          <option value="duration_desc">Longest</option>
+          <option value="duration_asc">Shortest</option>
+          <option value="title_asc">A–Z</option>
+          <option value="title_desc">Z–A</option>
+        </select>
+      </label>
+    </div>
+
+    <div id="videos-grid" class="videos">
+      <div class="loading" aria-label="Loading videos">
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+        <div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div><div class="skeleton-card"></div>
+      </div>
+    </div>
+    <div id="videos-load-sentinel" class="videos-load-sentinel" aria-hidden="true"></div>
+  </main>
+
+  <footer class="site-footer">
+    <p id="footer-text"></p>
+  </footer>
+
+  <dialog id="video-overlay" class="theater" aria-labelledby="overlay-video-title">
+    <div class="theater-inner" tabindex="-1" autofocus>
+      <button type="button" class="theater-close text-btn" aria-label="Close video player">Close</button>
+      <div class="theater-player">
+        <video id="overlay-video-player" playsinline controls></video>
+      </div>
+      <div class="theater-info">
+        <div class="theater-text">
+          <h2 id="overlay-video-title" class="theater-title"></h2>
+          <p id="overlay-video-meta" class="theater-meta"></p>
+        </div>
+        <div class="theater-actions">
+          <button type="button" id="overlay-favorite-btn" class="favorite-btn text-btn" aria-pressed="false">
+            <span class="favorite-icon" aria-hidden="true"></span>
+            <span class="favorite-text">Favorite</span>
+          </button>
+          <div class="share-container">
+            <button type="button" id="overlay-share-toggle-btn" class="share-btn text-btn" aria-controls="overlay-share-popover" aria-expanded="false">Share</button>
+            <div id="overlay-share-popover" class="share-popover">
+              <button type="button" id="overlay-copy-base-link-btn" class="popover-btn">Copy link</button>
+              <button type="button" id="overlay-copy-timestamp-link-btn" class="popover-btn">Copy link at current time</button>
+              <span id="overlay-popover-current-time" class="popover-time-display"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

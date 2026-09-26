@@ -26,8 +26,11 @@ git clone https://github.com/JohanWes/vodlibrary.git
 cd vodlibrary
 npm install
 cp .env.example .env  # Edit with your settings
+npm run build         # Builds the frontend (web/) into dist/
 npm start
 ```
+
+After pulling frontend changes, run `npm run build` again and restart the server (it caches the page templates). For frontend development run `npm run dev` (server) and `npm run dev:web` (Vite at http://localhost:5173, proxying the API to the server).
 
 ### Linux (systemd user service)
 
@@ -113,9 +116,9 @@ See `.env.example` for a commented template. Relative paths resolve from the dir
 
 ## Security headers
 
-Every response carries `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` (plus the CDN origin in `media-src` when the CDN is enabled). Fonts and Plyr are served from the app itself, so no third-party origin is allowed. Set `CSP_REPORT_ONLY=true` to trial a change without enforcing it.
+Every response carries `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'` (plus the CDN origin in `media-src` when the CDN is enabled). Fonts and Plyr are bundled into the app, so no third-party origin is allowed. Set `CSP_REPORT_ONLY=true` to trial a change without enforcing it.
 
-With authentication on, only the login page and the files it and a share-link viewer need (`css/style.css`, `js/utils.js`, `js/player.js`, `js/login.js`, `favicon.ico`, `vendor/`, `fonts/`) are served before login.
+With authentication on, only the login page and the files it and a share-link viewer need (`login.html` and the build's `assets/` directory: code, styles, fonts and icons, no data) are served before login.
 
 ## Maintenance
 

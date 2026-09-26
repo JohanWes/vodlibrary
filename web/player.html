@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en" prefix="og: https://ogp.me/ns#">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="/">
+  <meta name="description" content="Watch and share videos">
+  <meta name="color-scheme" content="dark">
+  <title>Loading...</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
+  <script type="module" src="js/player.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <a href="." class="wordmark" id="app-title">&nbsp;</a>
+    <a href="." class="text-btn back-link">Library</a>
+  </header>
+
+  <main class="watch">
+    <div class="theater-player is-video-ready">
+      <video id="video-player" playsinline controls></video>
+    </div>
+    <div class="theater-info">
+      <div class="theater-text">
+        <h1 id="video-title" class="theater-title"></h1>
+        <p id="video-meta" class="theater-meta"></p>
+      </div>
+      <div class="theater-actions">
+        <button type="button" id="favorite-btn" class="favorite-btn text-btn" aria-pressed="false">
+          <span class="favorite-icon" aria-hidden="true"></span>
+          <span class="favorite-text">Favorite</span>
+        </button>
+        <div class="share-container">
+          <button type="button" id="share-toggle-btn" class="share-btn text-btn" aria-controls="share-popover" aria-expanded="false">Share</button>
+          <div id="share-popover" class="share-popover">
+            <button type="button" id="copy-base-link-btn" class="popover-btn">Copy link</button>
+            <button type="button" id="copy-timestamp-link-btn" class="popover-btn">Copy link at current time</button>
+            <span id="popover-current-time" class="popover-time-display"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p id="footer-text"></p>
+  </footer>
+</body>
+</html>

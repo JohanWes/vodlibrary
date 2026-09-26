@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <base href="/">
+  <meta name="color-scheme" content="dark">
+  <title>Login</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon">
+  <script type="module" src="js/login.js"></script>
+</head>
+<body class="login-page">
+  <main class="login-container">
+    <h1>Enter access key</h1>
+    <form action="login" method="POST">
+      <label for="sessionKey">Session key</label>
+      <input type="password" id="sessionKey" name="sessionKey" required autofocus>
+      <button type="submit" class="text-btn">Continue</button>
+    </form>
+    <p id="errorMessage" class="error-message" role="alert" hidden>Invalid session key. Please try again.</p>
+  </main>
+</body>
+</html>

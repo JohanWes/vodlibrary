@@ -8,7 +8,7 @@
  * @param {string} message - Text to display (rendered as text, never HTML)
  * @param {string} type - info | success | error
  */
-function showToast(message, type = 'info') {
+export function showToast(message, type = 'info') {
   let toastContainer = document.querySelector('.toast-container');
   if (!toastContainer) {
     toastContainer = document.createElement('div');
@@ -33,13 +33,11 @@ function showToast(message, type = 'info') {
  * Placeholder thumbnail as a data URI
  * @returns {string}
  */
-function getPlaceholderThumbnail() {
+export function getPlaceholderThumbnail() {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="225" viewBox="0 0 400 225">'
-    + '<defs><linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">'
-    + '<stop offset="0%" stop-color="#1a1a22"/><stop offset="100%" stop-color="#23232d"/></linearGradient></defs>'
-    + '<rect width="400" height="225" fill="url(#g)"/><circle cx="200" cy="112.5" r="50" fill="#2c2c3a"/>'
-    + '<polygon points="185,90 185,135 225,112.5" fill="#5c6cff"/></svg>'
+    + '<rect width="400" height="225" fill="#161412"/>'
+    + '<polygon points="190,98 190,127 214,112.5" fill="#5d574f"/></svg>'
   );
 }
 
@@ -49,7 +47,7 @@ function getPlaceholderThumbnail() {
  * @param {number} seconds
  * @returns {string} e.g. 01:05, 25:00, 1:15:30
  */
-function formatClock(seconds) {
+export function formatClock(seconds) {
   const total = Number.isFinite(Number(seconds)) && Number(seconds) > 0 ? Math.floor(Number(seconds)) : 0;
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor((total % 3600) / 60);
@@ -59,15 +57,32 @@ function formatClock(seconds) {
 }
 
 /**
- * Display duration for a video DTO; prefers the numeric duration so >1 h renders as H:MM:SS.
- * @param {{duration?: number, duration_formatted?: string}} video
+ * Display duration for a video DTO (H:MM:SS above one hour)
+ * @param {{duration?: number}} video
  * @returns {string}
  */
-function formatVideoDuration(video) {
-  if (video && video.duration !== null && video.duration !== undefined && Number.isFinite(Number(video.duration))) {
-    return formatClock(video.duration);
-  }
-  return (video && video.duration_formatted) || '';
+export function formatVideoDuration(video) {
+  return video && video.duration != null && Number.isFinite(Number(video.duration)) ? formatClock(video.duration) : '';
+}
+
+const dateFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+const timeFormat = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+/** "11 Sep 2025" */
+export function formatDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : dateFormat.format(date);
+}
+
+/** "20:07" */
+export function formatTime(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : timeFormat.format(date);
+}
+
+/** Muted detail parts for a video: difficulty or key level, then the character */
+export function videoDetails(video) {
+  return [video.difficulty, video.player].filter(Boolean);
 }
 
 /**
@@ -75,7 +90,7 @@ function formatVideoDuration(video) {
  * @param {string} path - Application path, with or without leading slash (query/hash preserved)
  * @returns {string} - Root-relative URL resolved against the document base
  */
-function appUrl(path) {
+export function appUrl(path) {
   let basePath = '/';
   const baseElement = document.querySelector('base[href]');
   const baseHref = baseElement ? baseElement.getAttribute('href') : '';
@@ -106,7 +121,7 @@ let appConfigPromise = null;
  * Fetch (once) the public application configuration
  * @returns {Promise<Object>} - e.g. { vodsName, advancedSearch? }
  */
-function getAppConfig() {
+export function getAppConfig() {
   if (!appConfigPromise) {
     appConfigPromise = fetch(appUrl('/api/config'))
       .then((response) => {
@@ -138,11 +153,11 @@ function readFavorites() {
 }
 
 /** Drop the in-memory copy so the next read re-parses storage (bfcache restore, other tabs). */
-function reloadFavorites() {
+export function reloadFavorites() {
   favoritesCache = null;
 }
 
-function isFavorite(videoId) {
+export function isFavorite(videoId) {
   return readFavorites().has(String(videoId));
 }
 
@@ -150,7 +165,7 @@ function isFavorite(videoId) {
  * @param {string|number} videoId
  * @returns {boolean} - True if the video is now a favorite
  */
-function toggleFavorite(videoId) {
+export function toggleFavorite(videoId) {
   const favorites = readFavorites();
   const id = String(videoId);
   const nowFavorite = !favorites.has(id);
@@ -170,15 +185,3 @@ function toggleFavorite(videoId) {
 window.addEventListener('storage', (event) => {
   if (event.key === FAVORITES_KEY || event.key === null) reloadFavorites();
 });
-
-window.VideoUtils = {
-  showToast,
-  getPlaceholderThumbnail,
-  formatClock,
-  formatVideoDuration,
-  appUrl,
-  getAppConfig,
-  isFavorite,
-  toggleFavorite,
-  reloadFavorites
-};

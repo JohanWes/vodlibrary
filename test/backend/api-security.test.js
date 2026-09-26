@@ -97,7 +97,7 @@ describe('API security and validation', () => {
       expect(response.body.totalCount).toBe(1);
       expect(response.body.page).toBe(1);
       expect(response.body.limit).toBe(20);
-      expect(getVideosPaginated).toHaveBeenCalledWith(app.locals.db, 1, 20, null, 'date_added_desc');
+      expect(getVideosPaginated).toHaveBeenCalledWith(app.locals.db, 1, 20, null, 'recorded_desc');
     });
 
     test('passes validated page, limit, search, and sort', async () => {
@@ -109,7 +109,7 @@ describe('API security and validation', () => {
     test('treats an empty search as no filter', async () => {
       await request(app).get('/api/videos?search=').expect(200);
 
-      expect(getVideosPaginated).toHaveBeenCalledWith(app.locals.db, 1, 20, null, 'date_added_desc');
+      expect(getVideosPaginated).toHaveBeenCalledWith(app.locals.db, 1, 20, null, 'recorded_desc');
     });
 
     test('rejects invalid page values before DB', async () => {

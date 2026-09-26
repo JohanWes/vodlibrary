@@ -1,6 +1,7 @@
 const sqlite3 = require('sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { recordedAt } = require('../lib/video-facts');
 
 const defaultDbDir = process.env.DB_DIR || path.join(__dirname, '..', 'data', 'db');
 const defaultDbPath = path.join(defaultDbDir, 'videos.db');
@@ -16,10 +17,11 @@ const MIGRATION_COLUMNS = [
   ['metadata', 'TEXT'],
   ['metadata_mtime', 'TEXT'], // "<mtimeMs>:<size>" of the sidecar last parsed, 'none' = no sidecar
   ['preview_attempts', 'INTEGER DEFAULT 0'], // failed automatic attempts for this file version
-  ['preview_source_mtime', 'INTEGER'] // video mtimeMs when the preview status was recorded
+  ['preview_source_mtime', 'INTEGER'], // video mtimeMs when the preview status was recorded
+  ['recorded_at', 'TEXT'] // when the recording started (lib/video-facts.js recordedAt)
 ];
 
-// Every column except the multi-MB `metadata` sidecar blob.
+// The columns a video's detail view needs (`metadata` is the slim sidecar, lib/sidecar.js).
 const ROW_COLUMNS = [
   'id',
   'title',
@@ -32,7 +34,9 @@ const ROW_COLUMNS = [
   'death_timestamps',
   'preview_clips',
   'preview_generation_status',
-  'preview_generation_date'
+  'preview_generation_date',
+  'recorded_at',
+  'metadata'
 ].join(', ');
 
 // Exactly the columns lib/client-video.js toVideoCard reads.
@@ -46,15 +50,19 @@ const CARD_COLUMNS = [
   'thumbnail_path',
   'death_timestamps',
   'preview_clips',
-  'preview_generation_status'
+  'preview_generation_status',
+  'recorded_at',
+  'metadata'
 ].join(', ');
 
 // Whitelisted ORDER BY clauses. `id` breaks ties so pagination is stable.
 const ORDER_BY = {
   title_asc: 'ORDER BY title COLLATE NOCASE ASC, id ASC',
   title_desc: 'ORDER BY title COLLATE NOCASE DESC, id DESC',
-  date_added_asc: 'ORDER BY added_date ASC, id ASC',
-  date_added_desc: 'ORDER BY added_date DESC, id DESC'
+  recorded_asc: 'ORDER BY recorded_at ASC, id ASC',
+  recorded_desc: 'ORDER BY recorded_at DESC, id DESC',
+  duration_asc: 'ORDER BY duration ASC, id ASC',
+  duration_desc: 'ORDER BY duration DESC, id DESC'
 };
 
 /** @returns {Promise<number>} changed rows */
@@ -137,6 +145,11 @@ async function initializeDatabase(filename = defaultDbPath) {
         await run(db, `ALTER TABLE videos ADD COLUMN ${name} ${type}`);
       }
     }
+    await exec(db, 'CREATE INDEX IF NOT EXISTS idx_videos_recorded_at ON videos (recorded_at)');
+    const undated = await all(db, 'SELECT id, title, metadata, added_date FROM videos WHERE recorded_at IS NULL');
+    for (const row of undated) {
+      await run(db, 'UPDATE videos SET recorded_at = ? WHERE id = ?', [recordedAt(row.title, row.metadata, row.added_date), row.id]);
+    }
 
     return db;
   } catch (error) {
@@ -145,12 +158,12 @@ async function initializeDatabase(filename = defaultDbPath) {
   }
 }
 
-async function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort = 'date_added_desc') {
+async function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, sort = 'recorded_desc') {
   const offset = (page - 1) * limit;
   // Escape LIKE wildcards so `%` and `_` in the search term match literally.
   const where = searchQuery ? " WHERE title LIKE ? ESCAPE '\\' COLLATE NOCASE" : '';
   const whereParams = searchQuery ? [`%${String(searchQuery).replace(/[\\%_]/g, '\\$&')}%`] : [];
-  const orderBy = Object.hasOwn(ORDER_BY, sort) ? ORDER_BY[sort] : ORDER_BY.date_added_desc;
+  const orderBy = Object.hasOwn(ORDER_BY, sort) ? ORDER_BY[sort] : ORDER_BY.recorded_desc;
 
   const countRow = await get(db, `SELECT COUNT(*) AS totalCount FROM videos${where}`, whereParams);
   const videos = await all(
@@ -161,14 +174,14 @@ async function getVideosPaginated(db, page = 1, limit = 50, searchQuery = null, 
   return { videos, totalCount: countRow.totalCount };
 }
 
-/** Every column except the large `metadata` blob. */
+/** One video's detail row. */
 function getVideoById(db, id) {
   return get(db, `SELECT ${ROW_COLUMNS} FROM videos WHERE id = ?`, [id]);
 }
 
 /** The few columns needed to stream a video or render its watch page. */
 function getVideoStreamInfo(db, id) {
-  return get(db, 'SELECT id, title, path, width, height FROM videos WHERE id = ?', [id]);
+  return get(db, 'SELECT id, title, path, width, height, metadata FROM videos WHERE id = ?', [id]);
 }
 
 /**
@@ -182,8 +195,8 @@ async function addVideo(db, video) {
   const { title, path: videoPath, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime } = video;
   const row = await get(
     db,
-    `INSERT INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO videos (title, path, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET
        title = excluded.title,
        duration = excluded.duration,
@@ -191,12 +204,12 @@ async function addVideo(db, video) {
        height = excluded.height,
        thumbnail_path = COALESCE(excluded.thumbnail_path, videos.thumbnail_path)
      RETURNING id`,
-    [title, videoPath, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime]
+    [title, videoPath, duration, width, height, thumbnail_path, added_date, death_timestamps, metadata, metadata_mtime, recordedAt(title, metadata, added_date)]
   );
   return row.id;
 }
 
-/** Card-shaped row by path (no `metadata`), for watcher updates. */
+/** Card-shaped row by path, for watcher updates. */
 function getVideoCardByPath(db, videoPath) {
   return get(db, `SELECT ${CARD_COLUMNS} FROM videos WHERE path = ?`, [videoPath]);
 }

@@ -4,7 +4,9 @@
  * (pause + remove src + load()) when the pointer leaves or the grid re-renders.
  */
 
-class VideoPreviewManager {
+import { appUrl } from './utils.js';
+
+export class VideoPreviewManager {
   constructor() {
     this.videoPool = [];
     this.activeVideos = new Map(); // videoId -> { element, container, listeners: AbortController }
@@ -273,10 +275,4 @@ class VideoPreviewManager {
   resume() {
     this.isSuspended = false;
   }
-}
-
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { VideoPreviewManager };
-} else {
-  window.VideoPreviewManager = VideoPreviewManager;
 }

@@ -89,3 +89,6 @@ memory-bank/
 
 # Stale nested git repo from an old clone (kept locally, never tracked)
 .git_disabled/
+
+# Frontend build output (npm run build)
+dist/

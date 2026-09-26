@@ -21,6 +21,7 @@ const {
 } = require('./db/database');
 const { scanLibrary, stopMediaPipeline } = require('./lib/scanner');
 const { startLibraryWatcher } = require('./lib/watcher');
+const { videoFacts } = require('./lib/video-facts');
 const cdnManager = require('./lib/cdn');
 const {
   issueSessionToken,
@@ -75,7 +76,7 @@ cdnManager.initCdn({
   signedUrlsSecret: process.env.CDN_SIGNED_URLS_SECRET || ''
 });
 
-// Everything the pages load is same-origin (fonts and Plyr are vendored). The
+// Everything the pages load is same-origin (fonts and Plyr are bundled). The
 // one exception is media: with the CDN enabled, /stream redirects to CDN_BASE_URL.
 function buildContentSecurityPolicy(mediaOrigin = '') {
   return [
@@ -157,6 +158,11 @@ function sendSseUpdate(data) {
 }
 
 const publicDir = path.join(__dirname, 'public');
+// Built frontend (npm run build); tests point this at the web/ sources.
+const webDir = path.resolve(process.env.WEB_DIST_DIR || path.join(__dirname, 'dist'));
+if (!fs.existsSync(path.join(webDir, 'index.html'))) {
+  console.error(`Frontend build missing in ${webDir}: run "npm run build".`);
+}
 
 const SESSION_KEY = process.env.SESSION_KEY;
 const SESSION_SECRET = process.env.SESSION_SECRET;
@@ -257,7 +263,7 @@ const templateCache = new Map();
 
 async function loadTemplate(name) {
   if (!templateCache.has(name)) {
-    templateCache.set(name, await fs.promises.readFile(path.join(publicDir, name), 'utf8'));
+    templateCache.set(name, await fs.promises.readFile(path.join(webDir, name), 'utf8'));
   }
   return applySiteName(applyBasePath(templateCache.get(name)));
 }
@@ -283,7 +289,7 @@ const mediaStaticOptions = {
   }
 };
 
-// App shell assets (JS/CSS/icons): revalidated hourly; HTML always revalidated.
+// App shell: hashed build assets are immutable; HTML is always revalidated.
 const appStaticOptions = {
   cacheControl: false,
   setHeaders: (res, filePath) => {
@@ -293,19 +299,13 @@ const appStaticOptions = {
     );
   }
 };
+const assetStaticOptions = { immutable: true, maxAge: '1y' };
 
-// Pre-auth app shell: what the login page and a share-link viewer need, public
-// and revalidated hourly. Only exact file paths (no dot segments can match) and
-// the vendor/ and fonts/ directories (own static roots, so `..` cannot leave
-// them). A missing file falls through to checkAuth like any other path.
-const PRE_AUTH_FILES = new Set(['/css/style.css', '/js/utils.js', '/js/player.js', '/js/login.js', '/favicon.ico']);
-const preAuthStaticOptions = { maxAge: '1h' };
-const servePreAuthFile = express.static(publicDir, preAuthStaticOptions);
+// Pre-auth app shell: what the login page and a share-link viewer need. The
+// build's assets/ directory holds only code, styles, fonts and icons (its own static
+// root, so `..` cannot leave it); everything else falls through to checkAuth.
 app.get(basePath + '/login.html', (_req, res) => sendHtmlPage(res, 'login.html'));
-app.use(basePath, (req, res, next) => (PRE_AUTH_FILES.has(req.path) ? servePreAuthFile(req, res, next) : next()));
-for (const dir of ['vendor', 'fonts']) {
-  app.use(`${basePath}/${dir}`, express.static(path.join(publicDir, dir), preAuthStaticOptions));
-}
+app.use(`${basePath}/assets`, express.static(path.join(webDir, 'assets'), assetStaticOptions));
 
 app.post(basePath + '/login', (req, res) => {
   if (!SESSION_KEY || !SESSION_SECRET) {
@@ -430,7 +430,9 @@ app.get(basePath + '/watch/:id', async (req, res) => {
     }
 
     let playerHtml = await loadTemplate('player.html');
-    const title = escapeHtml(video.title);
+    const facts = videoFacts(video.title, video.metadata);
+    const details = [facts.difficulty, facts.outcome && facts.outcome.label].filter(Boolean).join(', ');
+    const title = escapeHtml(details ? `${facts.display_title} (${details})` : facts.display_title);
     const siteName = escapeHtml(vodsName);
     const publicBase = parsePublicBaseUrl(process.env.SHARE_BASE_URL, basePath);
     const width = Number.isFinite(video.width) && video.width > 0 ? video.width : 1280;
@@ -465,7 +467,7 @@ app.get(basePath + '/watch/:id', async (req, res) => {
 
 app.get(basePath + '/', (_req, res) => sendHtmlPage(res, 'index.html'));
 
-app.use(basePath, express.static(publicDir, appStaticOptions));
+app.use(basePath, express.static(webDir, appStaticOptions));
 
 const apiRoutes = require('./routes/api');
 app.use(basePath + '/api', apiRoutes);

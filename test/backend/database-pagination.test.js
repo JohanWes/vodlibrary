@@ -14,19 +14,12 @@ const {
   closeDatabase,
   addVideo,
   getVideoById,
-  getVideoStreamInfo,
-  getVideoCardByPath,
   getVideosPaginated,
   getVideosByIds,
   getVideosWithMetadata,
   getVideoScanStateByPath,
   updateVideoFields
 } = database;
-
-const CARD_KEYS = [
-  'id', 'title', 'duration', 'width', 'height', 'added_date', 'thumbnail_path',
-  'death_timestamps', 'preview_clips', 'preview_generation_status'
-].sort();
 
 function query(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -70,25 +63,6 @@ describe('db/database.js on real SQLite', () => {
     }
   });
 
-  test('list, detail and stream lookups never load the metadata blob', async () => {
-    const id = await addVideo(db, video({ title: 'A' }));
-
-    const { videos } = await getVideosPaginated(db, 1, 20, null, 'date_added_desc');
-    expect(Object.keys(videos[0]).sort()).toEqual(CARD_KEYS);
-
-    const detail = await getVideoById(db, id);
-    expect(detail).not.toHaveProperty('metadata');
-    expect(detail).toMatchObject({ id, title: 'A', path: '/library/A.mp4', width: 1920, height: 1080 });
-
-    expect(await getVideoStreamInfo(db, id)).toEqual({ id, title: 'A', path: '/library/A.mp4', width: 1920, height: 1080 });
-    expect(Object.keys(await getVideoCardByPath(db, '/library/A.mp4')).sort()).toEqual(CARD_KEYS);
-    expect(Object.keys((await getVideosByIds(db, [id]))[0]).sort()).toEqual(CARD_KEYS);
-
-    expect(await getVideoScanStateByPath(db, '/library/A.mp4')).not.toHaveProperty('metadata');
-    // Advanced search still gets the metadata it uses.
-    expect((await getVideosWithMetadata(db))[0].metadata).toContain('big');
-  });
-
   test('getVideosWithMetadata skips NULL and empty metadata', async () => {
     await addVideo(db, video({ title: 'with' }));
     await addVideo(db, video({ title: 'null', metadata: null }));
@@ -97,8 +71,8 @@ describe('db/database.js on real SQLite', () => {
   });
 
   test.each([
-    ['date_added_desc', ['c', 'b2', 'b1', 'a']],
-    ['date_added_asc', ['a', 'b1', 'b2', 'c']],
+    ['recorded_desc', ['c', 'b2', 'b1', 'a']],
+    ['recorded_asc', ['a', 'b1', 'b2', 'c']],
     ['title_asc', ['a', 'b1', 'b2', 'c']],
     ['title_desc', ['c', 'b2', 'b1', 'a']],
     ['not-a-sort; DROP TABLE videos', ['c', 'b2', 'b1', 'a']]
