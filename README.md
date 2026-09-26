@@ -29,9 +29,29 @@ cp .env.example .env  # Edit with your settings
 npm start
 ```
 
-### Linux (KDE Autostart)
+### Linux (systemd user service)
 
-The `scripts/start_server.sh` script can be added to KDE autostart to run on login. It runs from the repo root, writes output to `server.log`, and keeps the previous run's log as `server.log.1`.
+Save a unit like this as `~/.config/systemd/user/vodlibrary.service` (adjust the path to your checkout):
+
+```ini
+[Unit]
+Description=VODlibrary video streaming service
+
+[Service]
+WorkingDirectory=/home/you/vodlibrary
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable --now vodlibrary
+journalctl --user -u vodlibrary -f
+```
+
+Without systemd, `scripts/start_server.sh` starts the server from the repo root and logs to `server.log` (the previous run is kept as `server.log.1`).
 
 ### Windows Service
 
